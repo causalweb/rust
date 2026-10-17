@@ -6,7 +6,9 @@ Specification: `0.1.1-experimental`, exact commit in [SPEC_REVISION](SPEC_REVISI
 
 The `conformance_adapter` example implements the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner's JSON Lines profiles. It runs the 32-case evidence-verification profile through this library's verifier, the 17-case prefix-evaluation profile through its verifier, exact position parser, and `Snapshot` lineage evaluator, the three-case `context-reduction-v1` profile through the public carrier reducer, the 11-case HTTP client-confirmation profile through the public HTTP parsing and confirmation APIs, and the 15-case fixed-cut `http-observer-v1` profile through the public observer API. The separate `transport_conformance_server` example runs the 7-case raw loopback `http-transport-server-v1` profile through the same observer API after preserving repeated HTTP/1.1 request fields in an `http::Request`. The client profile explicitly excludes cross-origin redirect forwarding because that requires an HTTP agent. The observer and transport profiles use ephemeral evidence and synthetic fixed-cut snapshots; neither is a generic server, storage adapter, or deployment conformance claim. The adapters do not expose local validation diagnostics or receive network trust.
 
-## Implemented and tested
+## Existing evidence and pending work
+
+The baseline evidence below was collected before the local commits that add safe carrier reduction, the async observer, and the Axum adapter. Those new paths are explicitly marked **Pending verification** and do not inherit an earlier test or CI result.
 
 | Area | Evidence | Boundary |
 | --- | --- | --- |
