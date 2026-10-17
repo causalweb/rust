@@ -1,12 +1,12 @@
 # Dependency review snapshot
 
-Reviewed: 2026-10-17
+Reviewed: 2026-10-18
 
-Scope: the `Cargo.lock` at source-preview commit `4708d1565447da76e9716e0aa65465d26bd0a35d`, SHA-256 `2e491f39051ee78b0c7b45a27284cb74b179748a5918ecec4ad5a571c871f6bb`.
+Scope: the `Cargo.lock` at source-preview commit `a27bd0668ac6d6ef3081e5b143cf5f901bc3cd2a`, SHA-256 `ad803f9a5bb6e2be603922493c4c69f4c0333878a5016eef9743c201444703f2`.
 
-`cargo-audit` 0.22.2 checked 65 lockfile dependencies against RustSec database commit `64f92cdc64401fab47baa10e2e11fe382aa57155` (1,334 advisories; database timestamp `2026-10-17T01:27:42+02:00`). It reported zero known vulnerabilities and no informational warnings. The [machine-readable result](rustsec-2026-10-17.json) records the check. New lockfile contents require a new review.
+`cargo-audit` 0.22.2 checked 98 lockfile dependencies against RustSec database commit `999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b` (1,338 advisories; database timestamp `2026-10-17T17:23:59+02:00`). It reported zero known vulnerabilities and no informational warnings. The [machine-readable result](rustsec-2026-10-18.json) records the check. New lockfile contents require a new review.
 
-Cargo package metadata was also inspected for all 65 resolved packages. Every package declares license metadata. The dependency set contains MIT/Apache alternatives, BSD-3-Clause, Unlicense alternatives, and a Unicode-3.0 notice conjunction; `r-efi` offers MIT/Apache alternatives alongside LGPL. This is a metadata review, not a legal compliance certification or an audit of dependency source code. Distributors must retain the notices required by their selected licenses.
+Cargo metadata listed 87 packages, including the root package; every listed package declares license metadata. The dependency set contains MIT/Apache alternatives, BSD-3-Clause, Unlicense alternatives, and a Unicode-3.0 notice conjunction; one package offers MIT/Apache alternatives alongside LGPL-2.1-or-later. This is a metadata review, not a legal compliance certification or an audit of dependency source code. Distributors must retain the notices required by their selected licenses.
 
 The implementation reuses RustCrypto for ECDSA and the `sfv` parser for Structured Fields. Lockfile pins and reviewed action commit SHAs reduce unexpected changes but do not establish that dependencies are free of defects. Registry checksums do not authenticate every upstream maintainer or prevent a malicious future release.
 
