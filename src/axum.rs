@@ -35,13 +35,14 @@ pub fn has_causal_requirement(request: &Request) -> bool {
 
 /// Evaluate one finite, designated Axum observation without blocking asynchronous storage I/O.
 ///
-/// The request is consumed because this adapter owns a causal response path. It returns `None`
-/// for an ordinary request so the route can retain its normal response behavior. Call it only from
-/// a route whose request body and trailers are not separately interpreted as causal input. A
+/// The request remains owned by its route. The adapter copies only the initial method and fields
+/// needed by the core binding, and returns `None` for an ordinary request so the route can retain
+/// its normal response behavior. Call it only from a route whose request body and trailers are not
+/// separately interpreted as causal input. A
 /// returned [`ObservationError`] is local adapter state: redact it and convert it with
 /// [`ObservationError::into_response`] before returning it to an external client.
 pub async fn observe<A, AFut, C, R, RFut, AE, RE>(
-    request: Request,
+    request: &Request,
     options: ObservationOptions<'_>,
     authorize: A,
     clock: C,
@@ -54,13 +55,17 @@ where
     R: FnOnce() -> RFut,
     RFut: Future<Output = Result<Snapshot<::http::Response<Vec<u8>>>, RE>>,
 {
-    if !has_causal_requirement(&request) {
+    if !has_causal_requirement(request) {
         return Ok(None);
     }
-    let request = request.map(|_| ());
+    let mut causal_request = ::http::Request::new(());
+    *causal_request.method_mut() = request.method().clone();
+    *causal_request.uri_mut() = request.uri().clone();
+    *causal_request.version_mut() = request.version();
+    *causal_request.headers_mut() = request.headers().clone();
     let response = core_observe(
         CoreObservationOptions {
-            request: &request,
+            request: &causal_request,
             target: options.target,
             designated_observation: options.designated_observation,
             verifier: options.verifier,

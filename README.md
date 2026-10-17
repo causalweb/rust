@@ -61,7 +61,7 @@ use causalweb::axum::{self as causal_axum, ObservationOptions};
 
 async fn orders(request: axum::extract::Request) -> axum::response::Response {
     match causal_axum::observe(
-        request,
+        &request,
         ObservationOptions {
             target: "/orders/42",
             designated_observation: true,
