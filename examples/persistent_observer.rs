@@ -2,8 +2,9 @@
 //!
 //! This process verifies TypeScript-issued evidence and stores a projection frontier
 //! together with the response representation in one replaced document. Its delivery
-//! endpoint is a deliberately unauthenticated loopback test channel: a deployment
-//! must authenticate and bind application events independently of Causal Web evidence.
+//! endpoint requires a test-only bearer credential configured outside its state file.
+//! A deployment must use its own authenticated and integrity-protected delivery channel;
+//! Causal Web evidence does not authenticate or bind application event payloads.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -154,6 +155,24 @@ fn verifier() -> Result<Verifier, Box<dyn Error>> {
         }],
         Limits::default(),
     )?)
+}
+
+fn delivery_credential() -> Result<String, Box<dyn Error>> {
+    let value = env::var("CAUSALWEB_DEMO_DELIVERY_CREDENTIAL")?;
+    if value.len() < 32 || value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("test delivery credential must be at least 32 non-control bytes".into());
+    }
+    Ok(value)
+}
+
+fn authorized_delivery(incoming: &Incoming, credential: &str) -> bool {
+    let expected = format!("Bearer {credential}");
+    let mut values = incoming
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value);
+    matches!((values.next(), values.next()), (Some(value), None) if value == &expected)
 }
 
 fn valid_order(value: &str) -> bool {
@@ -364,6 +383,7 @@ fn serve_one(
     stream: &mut TcpStream,
     path: &Path,
     verifier: &Verifier,
+    delivery_credential: &str,
     now: u64,
 ) -> Result<bool, Box<dyn Error>> {
     let incoming = incoming(stream)?;
@@ -377,6 +397,10 @@ fn serve_one(
             "/deliver" | "/deliver?crash-after-apply"
         )
     {
+        if !authorized_delivery(&incoming, delivery_credential) {
+            write_response(stream, plain(StatusCode::UNAUTHORIZED))?;
+            return Ok(true);
+        }
         let event = serde_json::from_slice(&incoming.body)?;
         return match deliver(
             path,
@@ -427,12 +451,19 @@ fn serve_one(
 fn main() -> Result<(), Box<dyn Error>> {
     let args = arguments()?;
     let verifier = verifier()?;
+    let delivery_credential = delivery_credential()?;
     let listener = TcpListener::bind(&args.bind)?;
     println!("http://{}", listener.local_addr()?);
     std::io::stdout().flush()?;
     for incoming in listener.incoming() {
         let mut stream = incoming?;
-        match serve_one(&mut stream, &args.state, &verifier, args.now) {
+        match serve_one(
+            &mut stream,
+            &args.state,
+            &verifier,
+            &delivery_credential,
+            args.now,
+        ) {
             Ok(true) => (),
             Ok(false) => return Ok(()),
             Err(error) => {
