@@ -16,6 +16,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::evidence::{CommittedEvidence, Issuer, Limits, SigningKey};
+use p256::ecdsa::{Signature, signature::Signer};
 use serde::{Deserialize, Serialize};
 
 const ISSUER: &str = "https://orders.example";
@@ -151,18 +152,51 @@ fn replace(path: &Path, state: &State) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn issuer() -> Result<Issuer, Box<dyn Error>> {
+fn signing_key() -> Result<SigningKey, Box<dyn Error>> {
     let scalar = env::var("CAUSALWEB_DEMO_PRIVATE_KEY")?;
     let bytes = URL_SAFE_NO_PAD.decode(scalar)?;
-    let key = SigningKey::from_slice(&bytes)?;
+    Ok(SigningKey::from_slice(&bytes)?)
+}
+
+fn issuer() -> Result<Issuer, Box<dyn Error>> {
     Ok(Issuer::new(
         ISSUER.into(),
         KID.into(),
-        key,
+        signing_key()?,
         [DOMAIN.into()].into_iter().collect(),
         LIFETIME,
         Limits::default(),
     )?)
+}
+
+/// Application-test delivery integrity envelope. It is not Causal Web evidence
+/// or a protocol field; it lets the TypeScript peer reject a changed event
+/// before the peer fixture updates its projection document.
+fn delivery(event: &Event) -> Result<serde_json::Value, Box<dyn Error>> {
+    let header = serde_json::to_vec(&serde_json::json!({
+        "alg": "ES256",
+        "kid": KID,
+        "typ": "causalweb-demo-delivery+jwt"
+    }))?;
+    let payload = serde_json::to_vec(event)?;
+    let input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header),
+        URL_SAFE_NO_PAD.encode(&payload)
+    );
+    let signature: Signature = signing_key()?.sign(input.as_bytes());
+    let mut value = serde_json::to_value(event)?;
+    value
+        .as_object_mut()
+        .ok_or("serialized event is not an object")?
+        .insert(
+            "deliveryProof".into(),
+            serde_json::Value::String(format!(
+                "{input}.{}",
+                URL_SAFE_NO_PAD.encode(signature.to_bytes())
+            )),
+        );
+    Ok(value)
 }
 
 fn evidence_for(issuer: &Issuer, event: &Event, now: u64) -> Result<Event, Box<dyn Error>> {
@@ -313,7 +347,7 @@ fn serve_one(stream: &mut TcpStream, path: &Path, now: u64) -> Result<bool, Box<
     response(
         stream,
         "201 Created",
-        &serde_json::to_vec(&event)?,
+        &serde_json::to_vec(&delivery(&event)?)?,
         Some(&event.evidence),
     )?;
     Ok(true)
