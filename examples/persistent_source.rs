@@ -9,6 +9,8 @@ use std::{
     env,
     error::Error,
     fs,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
 };
 
@@ -64,6 +66,9 @@ enum Operation {
         interrupt_after_commit: bool,
     },
     Recover,
+    Serve {
+        bind: String,
+    },
 }
 
 fn next_value(
@@ -80,6 +85,7 @@ fn arguments() -> Result<Arguments, Box<dyn Error>> {
     let mut now = None;
     let mut order = None;
     let mut recover = false;
+    let mut bind = None;
     let mut interrupt_after_commit = false;
     while let Some(value) = values.next() {
         match value.as_str() {
@@ -87,14 +93,15 @@ fn arguments() -> Result<Arguments, Box<dyn Error>> {
             "--now" => now = Some(next_value(&mut values, "--now")?.parse()?),
             "--order" => order = Some(next_value(&mut values, "--order")?),
             "--recover" => recover = true,
+            "--listen" => bind = Some(next_value(&mut values, "--listen")?),
             "--interrupt-after-commit" => interrupt_after_commit = true,
             _ => return Err(format!("unknown argument {value}").into()),
         }
     }
     let state = state.ok_or("--state is required")?;
     let now = now.ok_or("--now is required")?;
-    let operation = match (order, recover) {
-        (Some(order), false) => {
+    let operation = match (order, recover, bind) {
+        (Some(order), false, None) => {
             if order.is_empty()
                 || !order
                     .bytes()
@@ -107,8 +114,9 @@ fn arguments() -> Result<Arguments, Box<dyn Error>> {
                 interrupt_after_commit,
             }
         }
-        (None, true) => Operation::Recover,
-        _ => return Err("supply exactly one of --order or --recover".into()),
+        (None, true, None) => Operation::Recover,
+        (None, false, Some(bind)) => Operation::Serve { bind },
+        _ => return Err("supply exactly one of --order, --recover, or --listen".into()),
     };
     Ok(Arguments {
         state,
@@ -193,54 +201,157 @@ fn print(state: &State, event: Option<&Event>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn commit(
+    path: &Path,
+    now: u64,
+    order: String,
+    interrupt_after_commit: bool,
+) -> Result<(State, Event), Box<dyn Error>> {
+    let mut state = load(path)?;
+    let position = state.next_position;
+    let event = Event {
+        evidence_id: format!("urn:causalweb:persistent-source:{position}:{order}"),
+        position,
+        order,
+        issued_at: now,
+        expires_at: now.checked_add(LIFETIME).ok_or("expiration overflows")?,
+        evidence: String::new(),
+    };
+    state.next_position = position.checked_add(1).ok_or("position overflows")?;
+    state.events.push(event.clone());
+    replace(path, &state)?;
+    if interrupt_after_commit {
+        return Err("injected interruption after durable source commit".into());
+    }
+    let issued = evidence_for(&issuer()?, &event, now)?;
+    *state
+        .events
+        .last_mut()
+        .ok_or("committed event disappeared")? = issued.clone();
+    replace(path, &state)?;
+    Ok((state, issued))
+}
+
+fn recover(path: &Path, now: u64) -> Result<State, Box<dyn Error>> {
+    let mut state = load(path)?;
+    let issuer = issuer()?;
+    let mut changed = false;
+    for event in &mut state.events {
+        if event.evidence.is_empty() {
+            *event = evidence_for(&issuer, event, now)?;
+            changed = true;
+        }
+    }
+    if changed {
+        replace(path, &state)?;
+    }
+    Ok(state)
+}
+
+fn headers(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 1024];
+    while !bytes.ends_with(b"\r\n\r\n") {
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            return Err("connection closed before HTTP headers".into());
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+        if bytes.len() > 16_384 {
+            return Err("HTTP headers exceed test fixture limit".into());
+        }
+    }
+    Ok(String::from_utf8(bytes)?)
+}
+
+fn response(
+    stream: &mut TcpStream,
+    status: &str,
+    body: &[u8],
+    causal_context: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    let context = causal_context
+        .map(|token| format!("Causal-Context: \"{token}\"\r\nCache-Control: private, no-store\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{context}\r\n",
+        body.len()
+    )?;
+    stream.write_all(body)?;
+    Ok(())
+}
+
+fn serve_one(stream: &mut TcpStream, path: &Path, now: u64) -> Result<bool, Box<dyn Error>> {
+    let request = headers(stream)?;
+    let request_line = request.lines().next().ok_or("missing HTTP request line")?;
+    if request_line == "POST /shutdown HTTP/1.1" {
+        response(stream, "204 No Content", &[], None)?;
+        return Ok(false);
+    }
+    if request_line == "POST /recover HTTP/1.1" {
+        let state = recover(path, now)?;
+        response(stream, "200 OK", &serde_json::to_vec(&state.events)?, None)?;
+        return Ok(true);
+    }
+    let Some(order) = request_line
+        .strip_prefix("POST /orders/")
+        .and_then(|value| value.strip_suffix(" HTTP/1.1"))
+    else {
+        response(stream, "404 Not Found", b"{}", None)?;
+        return Ok(true);
+    };
+    if order.is_empty()
+        || !order
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        response(stream, "400 Bad Request", b"{}", None)?;
+        return Ok(true);
+    }
+    let (_, event) = commit(path, now, order.into(), false)?;
+    response(
+        stream,
+        "201 Created",
+        &serde_json::to_vec(&event)?,
+        Some(&event.evidence),
+    )?;
+    Ok(true)
+}
+
+fn serve(path: &Path, now: u64, bind: &str) -> Result<(), Box<dyn Error>> {
+    let listener = TcpListener::bind(bind)?;
+    println!("http://{}", listener.local_addr()?);
+    std::io::stdout().flush()?;
+    for incoming in listener.incoming() {
+        let mut stream = incoming?;
+        match serve_one(&mut stream, path, now) {
+            Ok(true) => (),
+            Ok(false) => return Ok(()),
+            Err(error) => {
+                let _ = response(&mut stream, "500 Internal Server Error", b"{}", None);
+                eprintln!("persistent source request failed: {error}");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = arguments()?;
-    let mut state = load(&args.state)?;
     match args.operation {
         Operation::Commit {
             order,
             interrupt_after_commit,
         } => {
-            let position = state.next_position;
-            let event = Event {
-                evidence_id: format!("urn:causalweb:persistent-source:{position}:{order}"),
-                position,
-                order,
-                issued_at: args.now,
-                expires_at: args
-                    .now
-                    .checked_add(LIFETIME)
-                    .ok_or("expiration overflows")?,
-                evidence: String::new(),
-            };
-            state.next_position = position.checked_add(1).ok_or("position overflows")?;
-            state.events.push(event.clone());
-            replace(&args.state, &state)?;
-            if interrupt_after_commit {
-                return Err("injected interruption after durable source commit".into());
-            }
-            let issued = evidence_for(&issuer()?, &event, args.now)?;
-            *state
-                .events
-                .last_mut()
-                .ok_or("committed event disappeared")? = issued.clone();
-            replace(&args.state, &state)?;
+            let (state, issued) = commit(&args.state, args.now, order, interrupt_after_commit)?;
             print(&state, Some(&issued))?;
         }
         Operation::Recover => {
-            let issuer = issuer()?;
-            let mut changed = false;
-            for event in &mut state.events {
-                if event.evidence.is_empty() {
-                    *event = evidence_for(&issuer, event, args.now)?;
-                    changed = true;
-                }
-            }
-            if changed {
-                replace(&args.state, &state)?;
-            }
+            let state = recover(&args.state, args.now)?;
             print(&state, None)?;
         }
+        Operation::Serve { bind } => serve(&args.state, args.now, &bind)?,
     }
     Ok(())
 }
