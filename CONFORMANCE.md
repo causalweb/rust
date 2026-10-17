@@ -4,7 +4,7 @@ Status: Experimental, source preview; no complete deployment conformance claim
 
 Specification: `0.1.1-experimental`, exact commit in [SPEC_REVISION](SPEC_REVISION). Vector revision: `0.1.2`. The independent runner revision is pinned in [CONFORMANCE_REVISION](CONFORMANCE_REVISION). A passing fixture is evidence for that scenario, not certification of an entire class.
 
-The `conformance_adapter` example implements the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner's experimental evidence-verification JSON Lines profile. It maps its intentionally coarse public outcomes (`accept`, `expired`, `reject-request`, and `unsupported`) through this library's verifier. It does not expose local validation diagnostics, receive network trust, or establish full protocol conformance.
+The `conformance_adapter` example implements the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner's experimental JSON Lines profiles. It runs the 32-case evidence-verification profile through this library's verifier and the 17-case prefix-evaluation profile through its verifier, exact position parser, and `Snapshot` lineage evaluator. The prefix profile explicitly excludes its three context-reduction cases because this library does not expose a Core Carrier reducer. The adapter does not expose local validation diagnostics, receive network trust, or establish full protocol conformance.
 
 ## Implemented and tested
 
@@ -12,7 +12,7 @@ The `conformance_adapter` example implements the separate [`causalweb/conformanc
 | --- | --- | --- |
 | JWS evidence | All six baseline and 26 security fixtures; fresh Rust issuance verified by Node.js crypto | Fixed ES256 policy and locally configured keys only. Unknown protected header parameters are rejected by local policy. |
 | Claims | Exact URI-string trust matching, per-issuer domain authority, audience and subject binding, exact integral NumericDates, expiry boundary, lifetime/skew, duplicate names at every depth | Subject binding is exact equality to an already authenticated application partition. No permissive default or remote key discovery. |
-| Prefix evaluation | All twenty prefix/composition fixtures, including bottom versus zero, uint64 boundaries, stale cuts, composite minimum, exclusions, failures, and expiry precedence | Representation and lineage are supplied by a trusted adapter. No durable projection adapter is included yet. |
+| Prefix evaluation | All twenty repository fixtures; 17 selected cases also pass through the shared independent runner, including bottom versus zero, uint64 boundaries, stale cuts, composite minimum, exclusions, failures, and expiry precedence | The three context-reduction fixtures are explicitly outside the shared evaluator profile. Representation and lineage are supplied by a trusted adapter. No durable projection adapter is included yet. |
 | Carrier | Evidence bytes and duplicate input indices preserved; context reduction is not performed | Retaining all input is allowed by the profile. Limits report errors rather than silently dropping input. |
 | HTTP | Twelve response fixtures, request parsing/limits, invalid-input-before-read, indexed outcomes, current authorization and expiry rechecks, confirmation/cache fields | Helpers operate on HTTP message types. Network, TLS, CORS, CSRF, trailers, routing, cancellation, and ordinary preconditions belong to the integration. |
 
