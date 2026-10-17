@@ -14,7 +14,10 @@ cd rust
 cargo test --locked
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
+node scripts/check-package.mjs
 ```
+
+The last command requires a clean checkout. It builds and verifies the actual `.crate`, then compiles and runs a separate application against Cargo's extracted package, not this checkout's `src` directory. It uses the pinned dependency lockfile and cached dependencies in offline mode. The [consumer application](tests/consumer/src/main.rs) exercises typed issuance, stale rejection, confirmation, and access denial. It is synthetic and makes no durability claim.
 
 Run a synthetic wire exchange:
 
@@ -53,6 +56,33 @@ The library does not fetch keys, follow redirects, perform network I/O, or wait 
 6. Check `http::accept_confirmation` before exposing a response body. A legacy 200 without confirmation is rejected. Confirmed 404 and 410 retain their application absence semantics.
 
 `Snapshot::new` is a trusted-adapter boundary. Its constructor cannot prove that a database transaction occurred or that an exclusion contract is truthful. Do not build lineage from client fields, wall-clock timestamps, or the largest event merely received.
+
+## Typed source facts
+
+The issuer constructs the protocol claims. Application code supplies a `CommittedEvidence` value rather than JSON:
+
+```rust
+use causalweb::evidence::{CommittedEvidence, Issuer};
+
+fn issue_after_commit(issuer: &Issuer, stable_position: u64, evidence_id: &str,
+    now: u64, expires_at: u64) -> Result<String, causalweb::Error> {
+    issuer.issue_committed(&CommittedEvidence {
+        subject: "tenant-42",
+        audiences: &["orders-view"],
+        domain: "https://source.example/domains/orders/epoch-1",
+        position: stable_position,
+        issued_at: now,
+        expires_at,
+        evidence_id,
+    }, now)
+}
+```
+
+Call this only after the storage adapter establishes commitment and recovery. `evidence_id` must be globally unique; an order number or per-domain position is not sufficient on its own. Positions use `u64`, including zero and its maximum value. Dates use integral UTC seconds within `MAX_DATE`. The issuer validates dates, audiences, domain authority, and bounds, but cannot establish database truth.
+
+`Limits::default()` supplies finite local limits: 16 requirements, 16,384 combined field bytes, 8,192 token bytes, 8,192 decoded bytes, and JSON depth 32. Lifetime, clock skew, trust, subject, and authorization remain explicit. Use `cargo doc --open --no-deps` for the API reference.
+
+Source API migration: `issue_committed` previously took `&serde_json::Value`. Replace it with `&CommittedEvidence`; do not supply `iss`, `alg`, `commit`, `profile`, or version markers. This is a breaking change to the unreleased source preview, not a new wire revision. See [CHANGELOG.md](CHANGELOG.md). No registry package has been released.
 
 ## Status and participation
 

@@ -14,14 +14,16 @@ Specification: `0.1.1-experimental`, exact commit in [SPEC_REVISION](SPEC_REVISI
 | Carrier | Evidence bytes and duplicate input indices preserved; context reduction is not performed | Retaining all input is allowed by the profile. Limits report errors rather than silently dropping input. |
 | HTTP | Twelve response fixtures, request parsing/limits, invalid-input-before-read, indexed outcomes, current authorization and expiry rechecks, confirmation/cache fields | Helpers operate on HTTP message types. Network, TLS, CORS, CSRF, trailers, routing, cancellation, and ordinary preconditions belong to the integration. |
 
-Local tests currently run on Windows. The committed CI workflow additionally tests Linux and Windows using Rust 1.95, checks the exact specification pin, builds documentation, verifies Rust output using Node.js, and builds a source package. CI results, not the presence of a workflow, establish whether those jobs passed.
+The SDK tests also exercise typed issuance at zero and the maximum uint64 position, invalid source facts, and an application compiled against the verified `.crate` archive. These checks concern SDK usability and packaging, not a complete deployment class. The committed CI workflow tests Linux and Windows using Rust 1.95; refer to the run on the exact reviewed commit for results.
+
+The [TypeScript implementation](https://github.com/causalweb/typescript) now implements the wire rules independently. Its development peer check verifies actual signed evidence and HTTP field strings in both directions against an exact Rust commit. The current peer pin and result belong to that repository; do not infer them from the latest Rust branch. Synthetic peer checks are not persistent-service interoperability or independent external review.
 
 ## Deliberately not claimed
 
 - **Prefix Issuer:** no durable source log/outbox adapter or issuer crash-injection report yet. The signer requires a caller-established commitment point and caller-managed globally unique `jti` values. It cannot prove their truth or uniqueness.
 - **Prefix Verifier:** no durable projection/frontier transaction or recovery test yet. A false snapshot supplied by an adapter can cause false satisfaction.
 - **Complete HTTP Server or Client:** no network adapter, streaming/cancellation integration, browser CORS verification, full conditional-request integration, or default redirect policy for an actual HTTP agent yet. The helpers themselves do not perform redirects or network requests.
-- **Independent implementation interoperability:** Node.js signature verification is a cryptographic cross-check, not a TypeScript protocol implementation. The same author producing different code is not independent external review.
+- **Durable independent-service interoperability:** two protocol engines exchange synthetic evidence/fields, but there is no persistent source/projection recovery demonstration. Node.js crypto alone would only be a signature cross-check.
 - **Production readiness or security audit:** no external audit, external pilot, comprehensive fuzz campaign, load characterization, or stability commitment.
 
 ## Operational policy

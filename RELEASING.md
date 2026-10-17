@@ -5,7 +5,7 @@ No registry package or GitHub release has been published yet. `publish = false` 
 A source preview or package release needs:
 
 1. An exact specification commit, vector revision, and compatibility report; never infer compatibility from `0.1` alone.
-2. Passing formatting, lint, tests, documentation, fixture-provenance, cross-cryptography, and package-build checks on the release commit.
+2. Passing formatting, lint, tests, documentation, fixture-provenance, cross-cryptography, and `node scripts/check-package.mjs` checks on the release commit. The last check must compile/run a separate consumer of the extracted `.crate`; `cargo package` alone is insufficient SDK evidence.
 3. A dependency advisory/license review with tool/database versions and unresolved findings recorded. An unavailable or stale advisory source is not a clean audit.
 4. Updated changelog, limitations, security channel, and installation instructions that match what is actually distributed.
 5. An explicit review of the declared classes. Do not call the source preview a complete Prefix Issuer/Verifier or HTTP agent while adapters and crash tests are missing.

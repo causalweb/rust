@@ -22,6 +22,18 @@ pub struct Limits {
     pub max_json_depth: usize,
 }
 
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_requirements: 16,
+            max_header_bytes: 16_384,
+            max_token_bytes: 8_192,
+            max_decoded_bytes: 8_192,
+            max_json_depth: 32,
+        }
+    }
+}
+
 impl Limits {
     pub fn validate(&self) -> Result<(), Error> {
         if self.max_requirements == 0
@@ -273,6 +285,23 @@ pub struct Issuer {
     limits: Limits,
 }
 
+/// A stable source fact established by the application's storage adapter.
+///
+/// Positions are native `u64` values here and canonical decimal strings on the wire.
+/// Dates are integral UTC seconds, limited to [`MAX_DATE`]. `evidence_id` must be
+/// globally unique; neither an operation identifier nor an allocated position alone
+/// necessarily has that property. The issuer checks syntax, authority, and time
+/// policy, but cannot check whether the fact or its recovery information committed.
+pub struct CommittedEvidence<'a> {
+    pub subject: &'a str,
+    pub audiences: &'a [&'a str],
+    pub domain: &'a str,
+    pub position: u64,
+    pub issued_at: u64,
+    pub expires_at: u64,
+    pub evidence_id: &'a str,
+}
+
 impl Issuer {
     pub fn new(
         issuer: String,
@@ -301,8 +330,30 @@ impl Issuer {
         })
     }
 
-    pub fn issue_committed(&self, claims: &Value, now: u64) -> Result<String, Error> {
-        let payload = serde_json::to_vec(claims).map_err(|_| Error::InvalidEvidence)?;
+    /// Issue prefix evidence only after source commitment and recovery are established.
+    ///
+    /// This API constructs the protocol envelope; callers do not supply JSON claims,
+    /// algorithms, versions, or commitment/profile markers. It rejects empty or
+    /// duplicate audiences, unauthorized domains, invalid dates, and expired facts.
+    ///
+    /// ```
+    /// use causalweb::evidence::CommittedEvidence;
+    /// let fact = CommittedEvidence {
+    ///     subject: "tenant-42", audiences: &["orders-view"],
+    ///     domain: "https://source.example/domains/orders/epoch-1", position: 5,
+    ///     issued_at: 100, expires_at: 200,
+    ///     evidence_id: "urn:uuid:243041f2-27e4-4ff4-8767-d20148b9e514",
+    /// };
+    /// assert_eq!(fact.position, 5);
+    /// ```
+    pub fn issue_committed(&self, fact: &CommittedEvidence<'_>, now: u64) -> Result<String, Error> {
+        let claims = json!({
+            "iss": self.issuer, "sub": fact.subject, "aud": fact.audiences,
+            "iat": fact.issued_at, "exp": fact.expires_at, "jti": fact.evidence_id,
+            CLAIM: { "v": 1, "profile": PROFILE, "domain": fact.domain,
+                "position": fact.position.to_string(), "commit": "stable" }
+        });
+        let payload = serde_json::to_vec(&claims).map_err(|_| Error::InvalidEvidence)?;
         if payload.len() > self.limits.max_decoded_bytes {
             return Err(Error::TooLarge);
         }

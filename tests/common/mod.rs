@@ -2,7 +2,9 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::{
     CLAIM, PROFILE,
-    evidence::{Issuer, IssuerTrust, Limits, SigningKey, Verifier, VerifyingKey},
+    evidence::{
+        CommittedEvidence, Issuer, IssuerTrust, Limits, SigningKey, Verifier, VerifyingKey,
+    },
     prefix::{Frontier, Mapping, Snapshot},
 };
 use p256::ecdsa::{Signature, signature::Signer};
@@ -17,12 +19,17 @@ pub const AUDIENCE: &str = "https://verifier.example/causal";
 pub const TARGET: &str = "/orders/123";
 
 pub fn limits() -> Limits {
-    Limits {
-        max_requirements: 16,
-        max_header_bytes: 16384,
-        max_token_bytes: 8192,
-        max_decoded_bytes: 8192,
-        max_json_depth: 32,
+    Limits::default()
+}
+pub fn committed(position: u64) -> CommittedEvidence<'static> {
+    CommittedEvidence {
+        subject: SUBJECT,
+        audiences: &[AUDIENCE],
+        domain: DOMAIN,
+        position,
+        issued_at: 1,
+        expires_at: 1000,
+        evidence_id: "urn:test:ephemeral-evidence",
     }
 }
 pub fn claims(position: &str) -> Value {

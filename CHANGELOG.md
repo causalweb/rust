@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replace the raw-JSON `Issuer::issue_committed` input with `CommittedEvidence`. The issuer owns envelope construction; adapters supply typed stable facts. This breaks the earlier unreleased source API, not the wire format. Callers must migrate as described in the README.
+- Add finite `Limits::default()`, full-range typed-position tests, a compiled documentation example, and an external consumer of the verified `.crate` archive on Linux/Windows CI.
 - Implement ES256 evidence issuance and strict, bounded verification with explicit trust, subject, and time policy.
 - Evaluate prefix dependencies against selected-state component lineage with six outcomes.
 - Add HTTP Structured Fields, fail-closed confirmation, ordered problem outcomes, and single-attempt observation helpers.

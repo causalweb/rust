@@ -1,6 +1,4 @@
-//! Experimental Causal Web protocol components, not a storage or authorization system.
-//!
-//! See the repository's conformance report for adapter obligations and limitations.
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 pub mod evidence;

@@ -35,4 +35,4 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       - run: node scripts/check-wire.mjs .spec
-      - run: cargo package --locked
+      - run: node scripts/check-package.mjs

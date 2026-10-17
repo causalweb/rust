@@ -1,8 +1,7 @@
 //! Synthetic conformance exchange, not a durable source/projection demonstration.
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::{
-    CLAIM, PROFILE,
-    evidence::{Issuer, IssuerTrust, Limits, SigningKey, Verifier},
+    evidence::{CommittedEvidence, Issuer, IssuerTrust, Limits, SigningKey, Verifier},
     http as cw_http,
     prefix::{Frontier, Mapping, Snapshot},
 };
@@ -12,13 +11,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let limits = Limits {
-        max_requirements: 16,
-        max_header_bytes: 16384,
-        max_token_bytes: 8192,
-        max_decoded_bytes: 8192,
-        max_json_depth: 32,
-    };
+    let limits = Limits::default();
     let key = SigningKey::generate();
     let point = key.verifying_key().to_sec1_point(false);
     let bytes = point.as_bytes();
@@ -44,9 +37,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1000,
         limits,
     )?;
-    let claims = json!({"iss":"https://issuer.example", "sub":"opaque-test-subject", "aud":"https://verifier.example/causal",
-        "iat":1, "exp":1000, "jti":"urn:test:synthetic-wire-fixture", CLAIM:{"v":1,"profile":PROFILE,"domain":domain,"position":"5","commit":"stable"}});
-    let compact = issuer.issue_committed(&claims, 100)?;
+    let fact = CommittedEvidence {
+        subject: "opaque-test-subject",
+        audiences: &["https://verifier.example/causal"],
+        domain,
+        position: 5,
+        issued_at: 1,
+        expires_at: 1000,
+        evidence_id: "urn:test:synthetic-wire-fixture",
+    };
+    let compact = issuer.issue_committed(&fact, 100)?;
     let mut request = Request::new(());
     *request.headers_mut() = cw_http::request_headers(std::slice::from_ref(&compact), limits)?;
     let read = |frontier| {

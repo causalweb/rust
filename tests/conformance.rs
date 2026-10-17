@@ -275,7 +275,7 @@ fn issuer_to_observer_to_client_exchange() {
     let key = SigningKey::generate();
     let verifier = verifier(*key.verifying_key());
     let issuer = issuer(key);
-    let token = issuer.issue_committed(&claims("5"), 100).unwrap();
+    let token = issuer.issue_committed(&committed(5), 100).unwrap();
     let mut request = Request::new(());
     *request.headers_mut() = cw_http::request_headers(&[token], limits()).unwrap();
     let stale = cw_http::observe(
