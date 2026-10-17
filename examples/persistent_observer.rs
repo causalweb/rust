@@ -63,6 +63,8 @@ struct Delivery {
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct State {
     frontier: u64,
+    #[serde(default)]
+    first_terminal_failure: Option<u64>,
     orders: Vec<String>,
     applied: Vec<String>,
     pending: Vec<Event>,
@@ -241,6 +243,12 @@ fn deliver(
         return Err("delivery does not match verified evidence".into());
     }
     let mut state = load(path)?;
+    if state
+        .first_terminal_failure
+        .is_some_and(|failure| event_position >= failure)
+    {
+        return Err("delivery is at or beyond a terminal lineage failure".into());
+    }
     if event_position <= state.frontier {
         if state.applied.contains(&event.evidence) {
             return Ok(());
@@ -288,6 +296,34 @@ fn deliver(
     Ok(())
 }
 
+fn record_terminal_failure(
+    path: &Path,
+    verifier: &Verifier,
+    event: Event,
+    now: u64,
+) -> Result<(), Box<dyn Error>> {
+    if !valid_order(&event.order) || event.id.is_empty() || event.evidence.is_empty() {
+        return Err("invalid terminal event".into());
+    }
+    let evidence = verifier.verify(&event.evidence, SUBJECT, now)?;
+    let event_position = position(&event.position)?;
+    if evidence.domain() != DOMAIN || position(evidence.position())? != event_position {
+        return Err("terminal event does not match verified evidence".into());
+    }
+    let mut state = load(path)?;
+    if event_position <= state.frontier {
+        return Err("applied position cannot become terminal failure".into());
+    }
+    if let Some(existing) = state.first_terminal_failure {
+        if existing == event_position {
+            return Ok(());
+        }
+        return Err("conflicting terminal lineage failure".into());
+    }
+    state.first_terminal_failure = Some(event_position);
+    replace(path, &state)
+}
+
 fn snapshot(state: &State) -> Result<Snapshot<Response<Vec<u8>>>, Box<dyn Error>> {
     let response = Response::builder()
         .status(StatusCode::OK)
@@ -300,8 +336,8 @@ fn snapshot(state: &State) -> Result<Snapshot<Response<Vec<u8>>>, Box<dyn Error>
         (ISSUER.into(), DOMAIN.into()),
         Mapping::Relevant {
             component_frontiers: vec![Frontier::At(state.frontier)],
-            first_terminal_failure: None,
-            progress_possible: true,
+            first_terminal_failure: state.first_terminal_failure,
+            progress_possible: state.first_terminal_failure.is_none(),
         },
     )]
     .into_iter()
@@ -438,7 +474,7 @@ fn serve_one(
     if incoming.method == "POST"
         && matches!(
             incoming.path.as_str(),
-            "/deliver" | "/deliver?crash-after-apply"
+            "/deliver" | "/deliver?crash-after-apply" | "/terminal"
         )
     {
         if !authorized_delivery(&incoming, delivery_credential) {
@@ -451,13 +487,18 @@ fn serve_one(
             write_response(stream, plain(StatusCode::BAD_REQUEST))?;
             return Ok(true);
         }
-        return match deliver(
-            path,
-            verifier,
-            delivery.event,
-            now,
-            incoming.path == "/deliver?crash-after-apply",
-        ) {
+        let outcome = if incoming.path == "/terminal" {
+            record_terminal_failure(path, verifier, delivery.event, now)
+        } else {
+            deliver(
+                path,
+                verifier,
+                delivery.event,
+                now,
+                incoming.path == "/deliver?crash-after-apply",
+            )
+        };
+        return match outcome {
             Ok(()) => {
                 write_response(stream, plain(StatusCode::NO_CONTENT))?;
                 Ok(true)
