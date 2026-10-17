@@ -6,6 +6,9 @@ pub mod http;
 mod json;
 pub mod prefix;
 
+#[cfg(feature = "axum-0_8")]
+pub mod axum;
+
 use std::fmt;
 
 pub const PROFILE: &str = "https://github.com/causalweb/spec/profiles/prefix-01";

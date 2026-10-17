@@ -48,8 +48,38 @@ The development-only `conformance_adapter` example accepts one JSON Lines reques
 | `evidence::retained_context_indices` | Optionally returns original ordered evidence indices that a carrier must keep after safe Prefix Profile reduction | Verify every item under the current intended policy, retain the corresponding original compact strings without rewriting them, and report an invalid usable horizon. |
 | `prefix` | Distinguishes six outcomes against every relevant component of a selected state | Construct `Snapshot` from the exact representation and crash-safe lineage; authorize contract/schema-specific exclusions. |
 | `http` | Parses RFC 9651 fields, checks requirements before reading, rechecks authorization/expiry, emits fail-closed responses and capabilities | Supply a designated finite observation, authenticated transport, current access checks, and a state reader. |
+| `axum` (`axum-0_8` feature) | Route-scoped adapter that awaits authorization and a fixed-cut read, then converts the core response to Axum's `Body` | Bind it to an explicit finite observation route. Authentication, CORS, TLS, request-body/trailer policy, and transactional storage remain application responsibilities. |
 
 The library does not fetch keys, follow redirects, perform network I/O, or wait for progress. It advertises `max_wait_seconds: 0`; `Prefer: wait` is ignored. A client can retry a 412 under its own bounded policy. No dependency is silently discarded or rewritten. A carrier may compact only with `retained_context_indices`, which preserves all evidence it cannot prove safe to omit and never crosses domains.
+
+### Axum 0.8 route adapter
+
+Enable the optional `axum-0_8` feature when an Axum route owns an asynchronous authorization check and immutable snapshot read. The adapter is deliberately route-scoped: it does not use global middleware, because the route must bind lineage to the exact response state.
+
+```rust,ignore
+use causalweb::axum::{self as causal_axum, ObservationOptions};
+
+async fn orders(request: axum::extract::Request) -> axum::response::Response {
+    match causal_axum::observe(
+        request,
+        ObservationOptions {
+            target: "/orders/42",
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: authenticated_user.id(),
+        },
+        || async { authorize_current_request().await },
+        unix_time_seconds,
+        || async { read_order_snapshot_with_lineage().await },
+    ).await {
+        Ok(Some(response)) => response,
+        Ok(None) => ordinary_order_response().await,
+        Err(error) => error.into_response().map(axum::body::Body::from),
+    }
+}
+```
+
+The example intentionally leaves application authentication, error logging/redaction, database transaction handling, and CORS configuration to the route. It is an experimental adapter surface; it has not been promoted to a production compatibility claim.
 
 ## Safe integration sequence
 

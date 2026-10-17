@@ -2,7 +2,7 @@
 use ::http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use serde_json::json;
 use sfv::{BareItem, Item, List, ListEntry, ListSerializer, Parser, StringRef};
-use std::fmt;
+use std::{fmt, future::Future};
 
 use crate::{
     Error, PROFILE,
@@ -211,88 +211,22 @@ pub enum ObservationError<A, R> {
     InvalidRepresentation,
 }
 
-impl<A, R> ObservationError<A, R> {
-    /// Machine-readable local category; not a protocol field or dependency outcome.
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::Authorization { .. } => "authorization-unavailable",
-            Self::Read(_) => "read-unavailable",
-            Self::SnapshotTargetMismatch => "snapshot-target-mismatch",
-            Self::InvalidRepresentation => "invalid-representation",
-        }
-    }
-
-    /// Discard local diagnostics and construct an ordinary, empty, no-store error.
-    /// No causal marker, application body, evidence, or cause is returned.
-    pub fn into_response(self) -> Response<Vec<u8>> {
-        ordinary_error(match self {
-            Self::InvalidRepresentation => StatusCode::INTERNAL_SERVER_ERROR,
-            _ => StatusCode::SERVICE_UNAVAILABLE,
-        })
-    }
-}
-
-impl<A, R> fmt::Display for ObservationError<A, R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Causal Web observer: {}", self.code())
-    }
-}
-
-impl<A, R> fmt::Debug for ObservationError<A, R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
-impl<A: std::error::Error + 'static, R: std::error::Error + 'static> std::error::Error
-    for ObservationError<A, R>
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Authorization { source, .. } => Some(source),
-            Self::Read(source) => Some(source),
-            _ => None,
-        }
-    }
-}
-
-/// Single-attempt observer. No progress waiting is performed; `Prefer: wait` is ignored.
-///
-/// Authorization is checked before evidence processing and again before responding.
-/// The reader must return an immutable representation/lineage tuple for `target`.
-/// Transport adapters own TLS, CSRF, initial-field/trailer separation, cancellation,
-/// ordinary preconditions, header limits below this layer, and snapshot durability.
-///
-/// `Ok` contains an HTTP response, including denied access, invalid requirements,
-/// and indexed causal failures. `Err` preserves a local adapter/contract failure.
-/// Inspect/redact the error locally, then use [`ObservationError::into_response`].
-/// Callback panics are not caught. Bound callback work and cancellation in the host.
-pub fn observe<A, C, R, AE, RE>(
+fn validated_requirements<C>(
     options: ObservationOptions<'_>,
-    mut authorize: A,
-    mut clock: C,
-    read: R,
-) -> Result<Response<Vec<u8>>, ObservationError<AE, RE>>
+    clock: &mut C,
+) -> Result<Vec<String>, Box<Response<Vec<u8>>>>
 where
-    A: FnMut() -> Result<bool, AE>,
     C: FnMut() -> u64,
-    R: FnOnce() -> Result<Snapshot<Response<Vec<u8>>>, RE>,
 {
     let ObservationOptions {
         request,
-        target,
         designated_observation,
         verifier,
         authenticated_subject,
+        ..
     } = options;
-    if !authorize().map_err(|source| ObservationError::Authorization {
-        check: AuthorizationCheck::BeforeRead,
-        source,
-    })? {
-        return Ok(ordinary_error(StatusCode::FORBIDDEN));
-    }
     if connection_nominates_causal(request.headers()) {
-        return Ok(protocol_error(Error::InvalidRequirements));
+        return Err(Box::new(protocol_error(Error::InvalidRequirements)));
     }
     let lines = request
         .headers()
@@ -302,34 +236,41 @@ where
         .collect::<Result<Vec<_>, _>>();
     let tokens = match lines.and_then(|lines| parse_context(&lines, verifier.limits())) {
         Ok(tokens) => tokens,
-        Err(error) => return Ok(protocol_error(error)),
+        Err(error) => return Err(Box::new(protocol_error(error))),
     };
     if request.method() == Method::HEAD {
-        return Ok(protocol_error(Error::InvalidRequirements));
+        return Err(Box::new(protocol_error(Error::InvalidRequirements)));
     }
     if !designated_observation {
-        return Ok(protocol_error(Error::NotObservation));
+        return Err(Box::new(protocol_error(Error::NotObservation)));
     }
     let now = clock();
     for token in &tokens {
         if let Err(error) = verifier.verify(token, authenticated_subject, now) {
-            return Ok(protocol_error(error));
+            return Err(Box::new(protocol_error(error)));
         }
     }
-    let snapshot = read().map_err(ObservationError::Read)?;
+    Ok(tokens)
+}
+
+fn response_for_snapshot<AE, RE>(
+    options: ObservationOptions<'_>,
+    snapshot: Snapshot<Response<Vec<u8>>>,
+    tokens: &[String],
+    now: u64,
+) -> Result<Response<Vec<u8>>, ObservationError<AE, RE>> {
+    let ObservationOptions {
+        target,
+        verifier,
+        authenticated_subject,
+        ..
+    } = options;
     if snapshot.target != target {
         return Err(ObservationError::SnapshotTargetMismatch);
     }
-    if !authorize().map_err(|source| ObservationError::Authorization {
-        check: AuthorizationCheck::BeforeResponse,
-        source,
-    })? {
-        return Ok(ordinary_error(StatusCode::FORBIDDEN));
-    }
-    let now = clock();
     let mut evaluations = Vec::with_capacity(tokens.len());
     // Re-authenticate with the current exchange policy, then recheck expiry after the read.
-    for token in &tokens {
+    for token in tokens {
         let evidence = match verifier.verify(token, authenticated_subject, now) {
             Ok(evidence) => evidence,
             Err(error) => return Ok(protocol_error(error)),
@@ -398,6 +339,134 @@ where
             .insert(RESULT, HeaderValue::from_static("unsatisfied"));
         Ok(response)
     }
+}
+
+impl<A, R> ObservationError<A, R> {
+    /// Machine-readable local category; not a protocol field or dependency outcome.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Authorization { .. } => "authorization-unavailable",
+            Self::Read(_) => "read-unavailable",
+            Self::SnapshotTargetMismatch => "snapshot-target-mismatch",
+            Self::InvalidRepresentation => "invalid-representation",
+        }
+    }
+
+    /// Discard local diagnostics and construct an ordinary, empty, no-store error.
+    /// No causal marker, application body, evidence, or cause is returned.
+    pub fn into_response(self) -> Response<Vec<u8>> {
+        ordinary_error(match self {
+            Self::InvalidRepresentation => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        })
+    }
+}
+
+impl<A, R> fmt::Display for ObservationError<A, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Causal Web observer: {}", self.code())
+    }
+}
+
+impl<A, R> fmt::Debug for ObservationError<A, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl<A: std::error::Error + 'static, R: std::error::Error + 'static> std::error::Error
+    for ObservationError<A, R>
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authorization { source, .. } => Some(source),
+            Self::Read(source) => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Single-attempt observer. No progress waiting is performed; `Prefer: wait` is ignored.
+///
+/// Authorization is checked before evidence processing and again before responding.
+/// The reader must return an immutable representation/lineage tuple for `target`.
+/// Transport adapters own TLS, CSRF, initial-field/trailer separation, cancellation,
+/// ordinary preconditions, header limits below this layer, and snapshot durability.
+///
+/// `Ok` contains an HTTP response, including denied access, invalid requirements,
+/// and indexed causal failures. `Err` preserves a local adapter/contract failure.
+/// Inspect/redact the error locally, then use [`ObservationError::into_response`].
+/// Callback panics are not caught. Bound callback work and cancellation in the host.
+pub fn observe<A, C, R, AE, RE>(
+    options: ObservationOptions<'_>,
+    mut authorize: A,
+    mut clock: C,
+    read: R,
+) -> Result<Response<Vec<u8>>, ObservationError<AE, RE>>
+where
+    A: FnMut() -> Result<bool, AE>,
+    C: FnMut() -> u64,
+    R: FnOnce() -> Result<Snapshot<Response<Vec<u8>>>, RE>,
+{
+    if !authorize().map_err(|source| ObservationError::Authorization {
+        check: AuthorizationCheck::BeforeRead,
+        source,
+    })? {
+        return Ok(ordinary_error(StatusCode::FORBIDDEN));
+    }
+    let tokens = match validated_requirements(options, &mut clock) {
+        Ok(tokens) => tokens,
+        Err(response) => return Ok(*response),
+    };
+    let snapshot = read().map_err(ObservationError::Read)?;
+    if !authorize().map_err(|source| ObservationError::Authorization {
+        check: AuthorizationCheck::BeforeResponse,
+        source,
+    })? {
+        return Ok(ordinary_error(StatusCode::FORBIDDEN));
+    }
+    response_for_snapshot(options, snapshot, &tokens, clock())
+}
+
+/// Async equivalent of [`observe`] for a route-owned asynchronous authorization and snapshot
+/// reader. It preserves the same order and never blocks an async executor for storage I/O.
+pub async fn observe_async<A, AFut, C, R, RFut, AE, RE>(
+    options: ObservationOptions<'_>,
+    mut authorize: A,
+    mut clock: C,
+    read: R,
+) -> Result<Response<Vec<u8>>, ObservationError<AE, RE>>
+where
+    A: FnMut() -> AFut,
+    AFut: Future<Output = Result<bool, AE>>,
+    C: FnMut() -> u64,
+    R: FnOnce() -> RFut,
+    RFut: Future<Output = Result<Snapshot<Response<Vec<u8>>>, RE>>,
+{
+    if !authorize()
+        .await
+        .map_err(|source| ObservationError::Authorization {
+            check: AuthorizationCheck::BeforeRead,
+            source,
+        })?
+    {
+        return Ok(ordinary_error(StatusCode::FORBIDDEN));
+    }
+    let tokens = match validated_requirements(options, &mut clock) {
+        Ok(tokens) => tokens,
+        Err(response) => return Ok(*response),
+    };
+    let snapshot = read().await.map_err(ObservationError::Read)?;
+    if !authorize()
+        .await
+        .map_err(|source| ObservationError::Authorization {
+            check: AuthorizationCheck::BeforeResponse,
+            source,
+        })?
+    {
+        return Ok(ordinary_error(StatusCode::FORBIDDEN));
+    }
+    response_for_snapshot(options, snapshot, &tokens, clock())
 }
 
 pub fn capabilities(verifier: &Verifier) -> serde_json::Value {

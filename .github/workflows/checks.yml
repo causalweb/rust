@@ -43,9 +43,9 @@ jobs:
       - run: npm run check
       - run: cargo fmt --check
       - run: rustfmt --edition 2024 --check tests/consumer/src/main.rs
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --locked
-      - run: cargo doc --no-deps --locked
+      - run: cargo clippy --all-features --all-targets --locked -- -D warnings
+      - run: cargo test --all-features --locked
+      - run: cargo doc --all-features --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
       - run: node scripts/check-wire.mjs .spec
