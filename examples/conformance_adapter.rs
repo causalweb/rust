@@ -13,8 +13,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::{
     CLAIM, PROFILE,
     evidence::{IssuerTrust, Limits, Verifier, VerifyingKey},
+    http::{RESULT, accept_confirmation, parse_context},
     prefix::{Frontier, Mapping, Snapshot, evaluate, position},
 };
+use http::{HeaderValue, Response, StatusCode};
 use p256::ecdsa::{Signature, signature::Signer};
 use p256::elliptic_curve::Generate;
 use serde::Deserialize;
@@ -304,6 +306,58 @@ fn prefix_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
     Ok(json!({"id":id,"outcomes":outcomes,"aggregate_success":aggregate_success}))
 }
 
+fn http_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
+    if input.version != 1 || input.profile != "http-client-confirmation-v1" {
+        return Err("unsupported conformance profile".into());
+    }
+    let case = input
+        .case
+        .as_object()
+        .ok_or("HTTP case must be an object")?;
+    let id = value_string(case.get("id").ok_or("HTTP case lacks id")?, "HTTP case id")?;
+    let response_input = case
+        .get("response")
+        .and_then(Value::as_object)
+        .ok_or("HTTP case lacks response")?;
+    let status = response_input
+        .get("status")
+        .and_then(Value::as_u64)
+        .ok_or("HTTP response lacks status")?;
+    let status = u16::try_from(status)?;
+    if let Some(request) = case.get("request").and_then(Value::as_object) {
+        if let Some(requirement) = request.get("causal_require").and_then(Value::as_str) {
+            if parse_context(&[requirement], Limits::default()).is_ok() {
+                return Err("malformed requirement unexpectedly parsed".into());
+            }
+        }
+        if let Some(count) = request.get("evidence_count").and_then(Value::as_u64) {
+            let values = std::iter::repeat_n("\"x\"", usize::try_from(count)?).collect::<Vec<_>>();
+            if parse_context(&[&values.join(", ")], Limits::default()).is_ok() {
+                return Err("oversized requirement set unexpectedly parsed".into());
+            }
+        }
+    }
+    let mut response = Response::new(());
+    *response.status_mut() = StatusCode::from_u16(status)?;
+    if let Some(value) = response_input.get("causal_result").and_then(Value::as_str) {
+        response
+            .headers_mut()
+            .insert(RESULT, HeaderValue::from_str(value)?);
+    }
+    let confirmation = accept_confirmation(&response, true).is_ok();
+    let mut result = serde_json::Map::from_iter([(
+        "client_accepts_constrained_success".into(),
+        Value::Bool(confirmation && (200..=299).contains(&status)),
+    )]);
+    if case.get("client_accepts_causal_confirmation").is_some() {
+        result.insert(
+            "client_accepts_causal_confirmation".into(),
+            Value::Bool(confirmation),
+        );
+    }
+    Ok(json!({"id":id,"result":result}))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut bytes = Vec::new();
     io::stdin().take(1_048_577).read_to_end(&mut bytes)?;
@@ -314,6 +368,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let profile = value_string(raw.get("profile").ok_or("input lacks profile")?, "profile")?;
     if profile == "prefix-evaluation-v1" {
         println!("{}", prefix_result(serde_json::from_value(raw)?)?);
+        return Ok(());
+    }
+    if profile == "http-client-confirmation-v1" {
+        println!("{}", http_result(serde_json::from_value(raw)?)?);
         return Ok(());
     }
     let input: Input = serde_json::from_value(raw)?;
