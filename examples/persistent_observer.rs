@@ -65,6 +65,8 @@ struct State {
     frontier: u64,
     #[serde(default)]
     first_terminal_failure: Option<u64>,
+    #[serde(default)]
+    lineage_unknown: bool,
     orders: Vec<String>,
     applied: Vec<String>,
     pending: Vec<Event>,
@@ -243,6 +245,9 @@ fn deliver(
         return Err("delivery does not match verified evidence".into());
     }
     let mut state = load(path)?;
+    if state.lineage_unknown {
+        return Err("projection lineage is unknown".into());
+    }
     if state
         .first_terminal_failure
         .is_some_and(|failure| event_position >= failure)
@@ -311,6 +316,9 @@ fn record_terminal_failure(
         return Err("terminal event does not match verified evidence".into());
     }
     let mut state = load(path)?;
+    if state.lineage_unknown {
+        return Err("unknown lineage cannot establish a terminal failure".into());
+    }
     if event_position <= state.frontier {
         return Err("applied position cannot become terminal failure".into());
     }
@@ -321,6 +329,29 @@ fn record_terminal_failure(
         return Err("conflicting terminal lineage failure".into());
     }
     state.first_terminal_failure = Some(event_position);
+    replace(path, &state)
+}
+
+fn record_unknown_lineage(
+    path: &Path,
+    verifier: &Verifier,
+    event: Event,
+    now: u64,
+) -> Result<(), Box<dyn Error>> {
+    if !valid_order(&event.order) || event.id.is_empty() || event.evidence.is_empty() {
+        return Err("invalid unknown-lineage event".into());
+    }
+    let evidence = verifier.verify(&event.evidence, SUBJECT, now)?;
+    let event_position = position(&event.position)?;
+    if evidence.domain() != DOMAIN || position(evidence.position())? != event_position {
+        return Err("unknown-lineage event does not match verified evidence".into());
+    }
+    let mut state = load(path)?;
+    if event_position <= state.frontier {
+        return Err("applied position cannot establish unknown lineage".into());
+    }
+    state.lineage_unknown = true;
+    state.first_terminal_failure = None;
     replace(path, &state)
 }
 
@@ -335,9 +366,17 @@ fn snapshot(state: &State) -> Result<Snapshot<Response<Vec<u8>>>, Box<dyn Error>
     let lineage = [(
         (ISSUER.into(), DOMAIN.into()),
         Mapping::Relevant {
-            component_frontiers: vec![Frontier::At(state.frontier)],
-            first_terminal_failure: state.first_terminal_failure,
-            progress_possible: state.first_terminal_failure.is_none(),
+            component_frontiers: vec![if state.lineage_unknown {
+                Frontier::Unknown
+            } else {
+                Frontier::At(state.frontier)
+            }],
+            first_terminal_failure: if state.lineage_unknown {
+                None
+            } else {
+                state.first_terminal_failure
+            },
+            progress_possible: !state.lineage_unknown && state.first_terminal_failure.is_none(),
         },
     )]
     .into_iter()
@@ -474,7 +513,7 @@ fn serve_one(
     if incoming.method == "POST"
         && matches!(
             incoming.path.as_str(),
-            "/deliver" | "/deliver?crash-after-apply" | "/terminal"
+            "/deliver" | "/deliver?crash-after-apply" | "/terminal" | "/unknown"
         )
     {
         if !authorized_delivery(&incoming, delivery_credential) {
@@ -487,16 +526,16 @@ fn serve_one(
             write_response(stream, plain(StatusCode::BAD_REQUEST))?;
             return Ok(true);
         }
-        let outcome = if incoming.path == "/terminal" {
-            record_terminal_failure(path, verifier, delivery.event, now)
-        } else {
-            deliver(
+        let outcome = match incoming.path.as_str() {
+            "/terminal" => record_terminal_failure(path, verifier, delivery.event, now),
+            "/unknown" => record_unknown_lineage(path, verifier, delivery.event, now),
+            _ => deliver(
                 path,
                 verifier,
                 delivery.event,
                 now,
                 incoming.path == "/deliver?crash-after-apply",
-            )
+            ),
         };
         return match outcome {
             Ok(()) => {
