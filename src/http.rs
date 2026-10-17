@@ -2,6 +2,7 @@
 use ::http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use serde_json::json;
 use sfv::{BareItem, Item, List, ListEntry, ListSerializer, Parser, StringRef};
+use std::fmt;
 
 use crate::{
     Error, PROFILE,
@@ -177,36 +178,121 @@ fn ordinary_error(status: StatusCode) -> Response<Vec<u8>> {
     response
 }
 
+/// Application-supplied context for one designated observation exchange.
+/// Neither this value nor causal evidence authenticates the subject or authorizes
+/// the target. Those remain obligations of the application and `authorize` callback.
+#[derive(Clone, Copy)]
+pub struct ObservationOptions<'a> {
+    pub request: &'a Request<()>,
+    pub target: &'a str,
+    pub designated_observation: bool,
+    pub verifier: &'a Verifier,
+    pub authenticated_subject: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorizationCheck {
+    BeforeRead,
+    BeforeResponse,
+}
+
+/// A local adapter/contract failure, not a causal dependency outcome.
+///
+/// Causes retain their original types for application diagnostics. They can contain
+/// credentials or other private data: redact before logging, and never serialize
+/// them into an HTTP response. Debug/Display deliberately omit underlying causes.
+pub enum ObservationError<A, R> {
+    Authorization {
+        check: AuthorizationCheck,
+        source: A,
+    },
+    Read(R),
+    SnapshotTargetMismatch,
+    InvalidRepresentation,
+}
+
+impl<A, R> ObservationError<A, R> {
+    /// Machine-readable local category; not a protocol field or dependency outcome.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Authorization { .. } => "authorization-unavailable",
+            Self::Read(_) => "read-unavailable",
+            Self::SnapshotTargetMismatch => "snapshot-target-mismatch",
+            Self::InvalidRepresentation => "invalid-representation",
+        }
+    }
+
+    /// Discard local diagnostics and construct an ordinary, empty, no-store error.
+    /// No causal marker, application body, evidence, or cause is returned.
+    pub fn into_response(self) -> Response<Vec<u8>> {
+        ordinary_error(match self {
+            Self::InvalidRepresentation => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        })
+    }
+}
+
+impl<A, R> fmt::Display for ObservationError<A, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Causal Web observer: {}", self.code())
+    }
+}
+
+impl<A, R> fmt::Debug for ObservationError<A, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl<A: std::error::Error + 'static, R: std::error::Error + 'static> std::error::Error
+    for ObservationError<A, R>
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authorization { source, .. } => Some(source),
+            Self::Read(source) => Some(source),
+            _ => None,
+        }
+    }
+}
+
 /// Single-attempt observer. No progress waiting is performed; `Prefer: wait` is ignored.
 ///
 /// Authorization is checked before evidence processing and again before responding.
 /// The reader must return an immutable representation/lineage tuple for `target`.
 /// Transport adapters own TLS, CSRF, initial-field/trailer separation, cancellation,
 /// ordinary preconditions, header limits below this layer, and snapshot durability.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "The adapter supplies distinct authorization, clock, state-reader, and endpoint obligations explicitly"
-)]
-pub fn observe<A, C, R>(
-    request: &Request<()>,
-    target: &str,
-    designated_observation: bool,
-    verifier: &Verifier,
-    authenticated_subject: &str,
+///
+/// `Ok` contains an HTTP response, including denied access, invalid requirements,
+/// and indexed causal failures. `Err` preserves a local adapter/contract failure.
+/// Inspect/redact the error locally, then use [`ObservationError::into_response`].
+/// Callback panics are not caught. Bound callback work and cancellation in the host.
+pub fn observe<A, C, R, AE, RE>(
+    options: ObservationOptions<'_>,
     mut authorize: A,
     mut clock: C,
     read: R,
-) -> Response<Vec<u8>>
+) -> Result<Response<Vec<u8>>, ObservationError<AE, RE>>
 where
-    A: FnMut() -> bool,
+    A: FnMut() -> Result<bool, AE>,
     C: FnMut() -> u64,
-    R: FnOnce() -> Result<Snapshot<Response<Vec<u8>>>, ()>,
+    R: FnOnce() -> Result<Snapshot<Response<Vec<u8>>>, RE>,
 {
-    if !authorize() {
-        return ordinary_error(StatusCode::FORBIDDEN);
+    let ObservationOptions {
+        request,
+        target,
+        designated_observation,
+        verifier,
+        authenticated_subject,
+    } = options;
+    if !authorize().map_err(|source| ObservationError::Authorization {
+        check: AuthorizationCheck::BeforeRead,
+        source,
+    })? {
+        return Ok(ordinary_error(StatusCode::FORBIDDEN));
     }
     if connection_nominates_causal(request.headers()) {
-        return protocol_error(Error::InvalidRequirements);
+        return Ok(protocol_error(Error::InvalidRequirements));
     }
     let lines = request
         .headers()
@@ -216,26 +302,29 @@ where
         .collect::<Result<Vec<_>, _>>();
     let tokens = match lines.and_then(|lines| parse_context(&lines, verifier.limits())) {
         Ok(tokens) => tokens,
-        Err(error) => return protocol_error(error),
+        Err(error) => return Ok(protocol_error(error)),
     };
     if request.method() == Method::HEAD {
-        return protocol_error(Error::InvalidRequirements);
+        return Ok(protocol_error(Error::InvalidRequirements));
     }
     if !designated_observation {
-        return protocol_error(Error::NotObservation);
+        return Ok(protocol_error(Error::NotObservation));
     }
     let now = clock();
     for token in &tokens {
         if let Err(error) = verifier.verify(token, authenticated_subject, now) {
-            return protocol_error(error);
+            return Ok(protocol_error(error));
         }
     }
-    let snapshot = match read() {
-        Ok(snapshot) if snapshot.target == target => snapshot,
-        _ => return ordinary_error(StatusCode::SERVICE_UNAVAILABLE),
-    };
-    if !authorize() {
-        return ordinary_error(StatusCode::FORBIDDEN);
+    let snapshot = read().map_err(ObservationError::Read)?;
+    if snapshot.target != target {
+        return Err(ObservationError::SnapshotTargetMismatch);
+    }
+    if !authorize().map_err(|source| ObservationError::Authorization {
+        check: AuthorizationCheck::BeforeResponse,
+        source,
+    })? {
+        return Ok(ordinary_error(StatusCode::FORBIDDEN));
     }
     let now = clock();
     let mut evaluations = Vec::with_capacity(tokens.len());
@@ -243,7 +332,7 @@ where
     for token in &tokens {
         let evidence = match verifier.verify(token, authenticated_subject, now) {
             Ok(evidence) => evidence,
-            Err(error) => return protocol_error(error),
+            Err(error) => return Ok(protocol_error(error)),
         };
         evaluations.push(prefix::evaluate(&evidence, &snapshot, now));
     }
@@ -252,7 +341,7 @@ where
         if !allowed_confirmation_status(response.status().as_u16())
             || connection_nominates_causal(response.headers())
         {
-            return ordinary_error(StatusCode::INTERNAL_SERVER_ERROR);
+            return Err(ObservationError::InvalidRepresentation);
         }
         // Context issuance is separate; an adapter must not smuggle unvalidated evidence here.
         response.headers_mut().remove(CONTEXT);
@@ -281,7 +370,7 @@ where
                 .headers_mut()
                 .append(header::VARY, HeaderValue::from_static("Causal-Require"));
         }
-        response
+        Ok(response)
     } else {
         let failed = evaluations.iter().any(|e| e.outcome == Outcome::Failed);
         let outcomes = evaluations
@@ -307,7 +396,7 @@ where
         response
             .headers_mut()
             .insert(RESULT, HeaderValue::from_static("unsatisfied"));
-        response
+        Ok(response)
     }
 }
 

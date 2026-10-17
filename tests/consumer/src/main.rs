@@ -64,46 +64,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             )]),
         )
-        .map_err(|_| ())
     };
-    let stale = cw_http::observe(
-        &request,
+    let options = cw_http::ObservationOptions {
+        request: &request,
         target,
-        true,
-        &verifier,
-        subject,
-        || true,
-        || 100,
-        || read_at(4),
-    );
+        designated_observation: true,
+        verifier: &verifier,
+        authenticated_subject: subject,
+    };
+    let authorize = || Ok::<_, std::convert::Infallible>(true);
+    let stale = cw_http::observe(options, authorize, || 100, || read_at(4))?;
     assert_eq!(stale.status(), 412);
     assert!(cw_http::accept_confirmation(&stale, true).is_err());
-    let fresh = cw_http::observe(
-        &request,
-        target,
-        true,
-        &verifier,
-        subject,
-        || true,
-        || 100,
-        || read_at(5),
-    );
+    let fresh = cw_http::observe(options, authorize, || 100, || read_at(5))?;
     cw_http::accept_confirmation(&fresh, true)?;
     assert_eq!(fresh.body(), br#"{"order":42}"#);
     let denied = cw_http::observe(
-        &request,
-        target,
-        true,
-        &verifier,
-        subject,
-        || false,
+        options,
+        || Ok::<_, std::convert::Infallible>(false),
         || 100,
-        || panic!("must not select state"),
-    );
+        || -> Result<_, std::convert::Infallible> { panic!("must not select state") },
+    )?;
     assert_eq!(denied.status(), 403);
     assert!(!denied.headers().contains_key(cw_http::RESULT));
+    let unavailable = cw_http::observe(
+        options,
+        authorize,
+        || 100,
+        || Err(std::io::Error::other("synthetic database outage")),
+    )
+    .unwrap_err();
+    assert_eq!(unavailable.code(), "read-unavailable");
+    assert!(
+        matches!(&unavailable, cw_http::ObservationError::Read(source) if source.kind() == std::io::ErrorKind::Other)
+    );
+    let response = unavailable.into_response();
+    assert_eq!(response.status(), 503);
+    assert!(response.body().is_empty());
+    assert!(!response.headers().contains_key(cw_http::RESULT));
     println!(
-        "Packaged-crate consumer: stale rejection, confirmed observation, and access denial passed"
+        "Packaged-crate consumer: stale rejection, confirmation, access denial, and local-error conversion passed"
     );
     Ok(())
 }

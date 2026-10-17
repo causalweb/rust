@@ -67,12 +67,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let frontier = causalweb::prefix::position(&input.frontier)?;
     let response = cw_http::observe(
-        &request,
-        "/test",
-        true,
-        &verifier,
-        &input.subject,
-        || true,
+        cw_http::ObservationOptions {
+            request: &request,
+            target: "/test",
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: &input.subject,
+        },
+        || Ok::<_, std::convert::Infallible>(true),
         || input.now,
         || {
             Snapshot::new(
@@ -89,9 +91,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 )]),
             )
-            .map_err(|_| ())
         },
-    );
+    )?;
     let result = response
         .headers()
         .get(cw_http::RESULT)

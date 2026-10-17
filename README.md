@@ -51,7 +51,7 @@ The library does not fetch keys, follow redirects, perform network I/O, or wait 
 1. Commit the source operation and recovery/outbox fact under a documented storage fault model. Only then call `Issuer::issue_committed`. Signing does not prove commitment.
 2. Preserve the returned evidence bytes. Use `http::request_headers` for a constrained observation; it adds `no-cache, no-store`.
 3. Authorize the target through the application's existing authentication system. Evidence is not access authorization.
-4. Call `http::observe` with a callback that reads representation and lineage from one immutable state cut or transaction. A global checkpoint must not approve an older cache entry.
+4. Call `http::observe` with `ObservationOptions`, fallible authorization, a clock, and a callback that reads representation and lineage from one immutable state cut or transaction. A global checkpoint must not approve an older cache entry.
 5. The observer returns every indexed outcome when any requirement is not satisfied. An application payload is returned only when all requirements are satisfied.
 6. Check `http::accept_confirmation` before exposing a response body. A legacy 200 without confirmation is rejected. Confirmed 404 and 410 retain their application absence semantics.
 
@@ -83,6 +83,36 @@ Call this only after the storage adapter establishes commitment and recovery. `e
 `Limits::default()` supplies finite local limits: 16 requirements, 16,384 combined field bytes, 8,192 token bytes, 8,192 decoded bytes, and JSON depth 32. Lifetime, clock skew, trust, subject, and authorization remain explicit. Use `cargo doc --open --no-deps` for the API reference.
 
 Source API migration: `issue_committed` previously took `&serde_json::Value`. Replace it with `&CommittedEvidence`; do not supply `iss`, `alg`, `commit`, `profile`, or version markers. This is a breaking change to the unreleased source preview, not a new wire revision. See [CHANGELOG.md](https://github.com/causalweb/rust/blob/main/CHANGELOG.md). No registry package has been released.
+
+## Observer errors belong to the application
+
+`observe` now takes four arguments. `ObservationOptions` names the request, target, verifier, authenticated subject, and endpoint designation. Authorization returns `Result<bool, A>`: `Ok(false)` is denied access, while `Err` means that authorization could not be checked. The state reader returns its own `Result<Snapshot<_>, R>` without converting errors to `()`.
+
+```rust
+use causalweb::{http::{observe, ObservationOptions}, prefix::Snapshot};
+use http::Response;
+use std::io;
+
+fn handle(
+    options: ObservationOptions<'_>,
+    authorize: impl FnMut() -> Result<bool, io::Error>,
+    clock: impl FnMut() -> u64,
+    read: impl FnOnce() -> Result<Snapshot<Response<Vec<u8>>>, io::Error>,
+) -> Response<Vec<u8>> {
+    match observe(options, authorize, clock, read) {
+        Ok(response) => response,
+        Err(error) => {
+            // The application chooses its logger. Only the safe category is logged here.
+            eprintln!("observer adapter failure: {}", error.code());
+            error.into_response()
+        }
+    }
+}
+```
+
+`Ok` is an HTTP response, not a successful observation: it can contain 403, 400/431, or indexed 412/503 causal outcomes. `Err(ObservationError)` is a local adapter or snapshot-contract failure. The original authorization/read error type is preserved for explicit matching or `std::error::Error::source` when those types implement that trait. Authorization errors identify the before-read or before-response check. `Debug`/`Display` omit causes; cause-chain logging can still expose secrets and must use the application's redaction policy.
+
+`into_response()` deliberately discards local diagnostics and produces an empty `no-store` 503, or 500 for an invalid representation, without `Causal-Result` or application bytes. It does not serialize the cause or label a local backend outage as a causal `failed` outcome. Adapter timeouts, cancellation, and unexpected panics belong to the host; this synchronous helper cannot preempt blocked storage I/O. The [migration guide](https://github.com/causalweb/rust/blob/main/MIGRATION.md) covers the earlier eight-argument source API.
 
 ## Status and participation
 

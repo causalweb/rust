@@ -278,13 +278,15 @@ fn issuer_to_observer_to_client_exchange() {
     let token = issuer.issue_committed(&committed(5), 100).unwrap();
     let mut request = Request::new(());
     *request.headers_mut() = cw_http::request_headers(&[token], limits()).unwrap();
-    let stale = cw_http::observe(
-        &request,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let stale = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &request,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || {
             Ok(snapshot(
@@ -292,16 +294,19 @@ fn issuer_to_observer_to_client_exchange() {
                 vec![Frontier::At(4)],
             ))
         },
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(stale.status(), 412);
     assert!(cw_http::accept_confirmation(&stale, true).is_err());
-    let current = cw_http::observe(
-        &request,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let current = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &request,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || {
             Ok(snapshot(
@@ -309,7 +314,8 @@ fn issuer_to_observer_to_client_exchange() {
                 vec![Frontier::At(5)],
             ))
         },
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(current.status(), 200);
     assert_eq!(current.body(), b"indexed");
     assert_eq!(current.headers()["cache-control"], "private, no-store");

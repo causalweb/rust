@@ -10,7 +10,9 @@ Report exploitable vulnerabilities privately at [GitHub Security Advisories](htt
 
 The implementation authenticates evidence using fixed ES256 and administrator-supplied issuer/key/domain mappings. It does not fetch untrusted key URLs. Canonical base64url, bounded JSON, duplicate names at every depth, common claims, audiences, subjects, lifetime, and expiry are checked before state selection in the observer helper.
 
-The caller still owns current application authorization, TLS, route designation, CSRF and CORS, proxy limits, request cancellation, and log redaction. Supplying `authorize: || true` is appropriate only in synthetic tests or inside a separately enforced authorization boundary. Possession of evidence must never grant resource access.
+The caller still owns current application authorization, TLS, route designation, CSRF and CORS, proxy limits, request cancellation, and log redaction. Unconditionally returning `Ok(true)` from authorization is appropriate only in synthetic tests or inside a separately enforced authorization boundary. Possession of evidence must never grant resource access.
+
+`ObservationError` retains original adapter causes for local diagnostics. `Debug`/`Display` omit them, but a logger that follows `std::error::Error::source` can still expose sensitive backend information. Apply application redaction and use `into_response()` before writing HTTP; never serialize a cause. Local adapter outages are not indexed causal `failed` outcomes. See [MIGRATION.md](MIGRATION.md) for the unreleased host-boundary change.
 
 Signing does not create a stable source fact. A frontier does not create a projection transaction. Exclusions and lineage must come from an authorized, versioned storage/projection contract and describe the exact response state. Malicious or incorrectly implemented issuers and adapters can lie despite valid signatures.
 

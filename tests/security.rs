@@ -237,19 +237,22 @@ fn validation_happens_before_state_selection_and_errors_do_not_leak() {
     let key = SigningKey::generate();
     let verifier = verifier(*key.verifying_key());
     let read = Cell::new(false);
-    let response = cw_http::observe(
-        &request("not-a-jws"),
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &request("not-a-jws"),
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || {
             read.set(true);
             Ok(snapshot(Response::new(vec![]), vec![Frontier::At(5)]))
         },
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert!(!read.get());
     assert_eq!(response.status(), 400);
     assert!(!response.headers().contains_key(cw_http::RESULT));
@@ -267,13 +270,15 @@ fn expiry_and_authorization_are_rechecked_after_read() {
     c["exp"] = json!(101);
     let req = request(&sign(&key, &c));
     let calls = Cell::new(0);
-    let response = cw_http::observe(
-        &req,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &req,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || {
             calls.set(calls.get() + 1);
             if calls.get() == 1 { 100 } else { 101 }
@@ -284,22 +289,27 @@ fn expiry_and_authorization_are_rechecked_after_read() {
                 vec![Frontier::At(5)],
             ))
         },
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(response.status(), 412);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(response.body()).unwrap()["outcomes"][0]["outcome"],
         "expired"
     );
     let checks = Cell::new(0);
-    let response = cw_http::observe(
-        &req,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &req,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
         || {
-            checks.set(checks.get() + 1);
-            checks.get() == 1
+            Ok::<_, ()>({
+                checks.set(checks.get() + 1);
+                checks.get() == 1
+            })
         },
         || 100,
         || {
@@ -308,7 +318,8 @@ fn expiry_and_authorization_are_rechecked_after_read() {
                 vec![Frontier::At(5)],
             ))
         },
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(response.status(), 403);
     assert!(response.body().is_empty());
     assert!(!response.headers().contains_key(cw_http::RESULT));
@@ -325,16 +336,19 @@ fn ordered_duplicates_limits_and_method_checks() {
             cw_http::request_headers(&[token.clone(), token.clone()], limits()).unwrap();
         r
     };
-    let response = cw_http::observe(
-        &req,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &req,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || Ok(snapshot(Response::new(vec![]), vec![Frontier::Bottom])),
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
     assert_eq!(body["outcomes"].as_array().unwrap().len(), 2);
     assert_eq!(body["outcomes"][0]["index"], 0);
@@ -344,45 +358,54 @@ fn ordered_duplicates_limits_and_method_checks() {
         cw_http::REQUIRE,
         HeaderValue::from_str(&vec!["\"x\""; 17].join(", ")).unwrap(),
     );
-    let response = cw_http::observe(
-        &oversized,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &oversized,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || panic!("must not read"),
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(response.status(), 431);
     assert!(!response.headers().contains_key(cw_http::RESULT));
     let mut head = request(&token);
     *head.method_mut() = http::Method::HEAD;
     assert_eq!(
-        cw_http::observe(
-            &head,
-            TARGET,
-            true,
-            &verifier,
-            SUBJECT,
-            || true,
+        cw_http::observe::<_, _, _, (), ()>(
+            cw_http::ObservationOptions {
+                request: &head,
+                target: TARGET,
+                designated_observation: true,
+                verifier: &verifier,
+                authenticated_subject: SUBJECT,
+            },
+            || Ok::<_, ()>(true),
             || 100,
-            || panic!("must not read")
+            || panic!("must not read"),
         )
+        .unwrap_or_else(cw_http::ObservationError::into_response)
         .status(),
         400
     );
     assert_eq!(
-        cw_http::observe(
-            &request(&token),
-            TARGET,
-            false,
-            &verifier,
-            SUBJECT,
-            || true,
+        cw_http::observe::<_, _, _, (), ()>(
+            cw_http::ObservationOptions {
+                request: &request(&token),
+                target: TARGET,
+                designated_observation: false,
+                verifier: &verifier,
+                authenticated_subject: SUBJECT,
+            },
+            || Ok::<_, ()>(true),
             || 100,
-            || panic!("must not read")
+            || panic!("must not read"),
         )
+        .unwrap_or_else(cw_http::ObservationError::into_response)
         .status(),
         400
     );
@@ -516,13 +539,15 @@ fn server_reports_all_six_outcomes_without_returning_the_application_body() {
             },
         ),
     ]);
-    let response = cw_http::observe(
-        &request,
-        TARGET,
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &request,
+            target: TARGET,
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || {
             Snapshot::new(
@@ -534,7 +559,8 @@ fn server_reports_all_six_outcomes_without_returning_the_application_body() {
             )
             .map_err(|_| ())
         },
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(response.status(), 503);
     assert_eq!(response.headers()[cw_http::RESULT], "unsatisfied");
     let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
@@ -566,13 +592,15 @@ fn response_status_target_and_vary_cannot_weaken_confirmation() {
     let verifier = verifier(*key.verifying_key());
     let req = request(&sign(&key, &claims("5")));
     for status in [202, 304] {
-        let response = cw_http::observe(
-            &req,
-            TARGET,
-            true,
-            &verifier,
-            SUBJECT,
-            || true,
+        let response = cw_http::observe::<_, _, _, (), ()>(
+            cw_http::ObservationOptions {
+                request: &req,
+                target: TARGET,
+                designated_observation: true,
+                verifier: &verifier,
+                authenticated_subject: SUBJECT,
+            },
+            || Ok::<_, ()>(true),
             || 100,
             || {
                 Ok(snapshot(
@@ -580,18 +608,21 @@ fn response_status_target_and_vary_cannot_weaken_confirmation() {
                     vec![Frontier::At(5)],
                 ))
             },
-        );
+        )
+        .unwrap_or_else(cw_http::ObservationError::into_response);
         assert_eq!(response.status(), 500);
         assert!(!response.headers().contains_key(cw_http::RESULT));
     }
     for status in [200, 404, 410] {
-        let response = cw_http::observe(
-            &req,
-            TARGET,
-            true,
-            &verifier,
-            SUBJECT,
-            || true,
+        let response = cw_http::observe::<_, _, _, (), ()>(
+            cw_http::ObservationOptions {
+                request: &req,
+                target: TARGET,
+                designated_observation: true,
+                verifier: &verifier,
+                authenticated_subject: SUBJECT,
+            },
+            || Ok::<_, ()>(true),
             || 100,
             || {
                 Ok(snapshot(
@@ -603,22 +634,26 @@ fn response_status_target_and_vary_cannot_weaken_confirmation() {
                     vec![Frontier::At(5)],
                 ))
             },
-        );
+        )
+        .unwrap_or_else(cw_http::ObservationError::into_response);
         assert_eq!(response.status(), status);
         assert_eq!(response.headers()["vary"], "*");
         assert_eq!(response.headers().get_all("vary").iter().count(), 1);
         cw_http::accept_confirmation(&response, true).unwrap();
     }
-    let response = cw_http::observe(
-        &req,
-        "/different-target",
-        true,
-        &verifier,
-        SUBJECT,
-        || true,
+    let response = cw_http::observe::<_, _, _, (), ()>(
+        cw_http::ObservationOptions {
+            request: &req,
+            target: "/different-target",
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: SUBJECT,
+        },
+        || Ok::<_, ()>(true),
         || 100,
         || Ok(snapshot(Response::new(vec![]), vec![Frontier::At(5)])),
-    );
+    )
+    .unwrap_or_else(cw_http::ObservationError::into_response);
     assert_eq!(response.status(), 503);
     assert!(!response.headers().contains_key(cw_http::RESULT));
 }

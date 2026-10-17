@@ -66,25 +66,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     };
     let stale = cw_http::observe(
-        &request,
-        "/test",
-        true,
-        &verifier,
-        "opaque-test-subject",
-        || true,
+        cw_http::ObservationOptions {
+            request: &request,
+            target: "/test",
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: "opaque-test-subject",
+        },
+        || Ok::<_, std::convert::Infallible>(true),
         || 100,
-        || read(4).map_err(|_| ()),
-    );
+        || read(4),
+    )?;
     let fresh = cw_http::observe(
-        &request,
-        "/test",
-        true,
-        &verifier,
-        "opaque-test-subject",
-        || true,
+        cw_http::ObservationOptions {
+            request: &request,
+            target: "/test",
+            designated_observation: true,
+            verifier: &verifier,
+            authenticated_subject: "opaque-test-subject",
+        },
+        || Ok::<_, std::convert::Infallible>(true),
         || 100,
-        || read(5).map_err(|_| ()),
-    );
+        || read(5),
+    )?;
     cw_http::accept_confirmation(&fresh, true)?;
     println!(
         "{}",
