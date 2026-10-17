@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+Pending release notes now live in [.changeset](.changeset/README.md) and are generated into version entries by Changesets. No release has been published.
+
+## Pre-Changesets engineering history
 
 - Replace eight positional observation arguments with `ObservationOptions` plus authorization/clock/read callbacks. Return `Result<Response<_>, ObservationError<A, R>>`, retaining typed adapter causes and authorization checkpoints. This breaks the unreleased observer source API; see `MIGRATION.md`. Safe error conversion preserves ordinary 500/503 responses without causal markers or private bodies.
 - Replace the raw-JSON `Issuer::issue_committed` input with `CommittedEvidence`. The issuer owns envelope construction; adapters supply typed stable facts. This breaks the earlier unreleased source API, not the wire format. Callers must migrate as described in the README.

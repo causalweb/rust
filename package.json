@@ -1,0 +1,17 @@
+{
+  "name": "@causalweb/rust-release",
+  "version": "0.1.0-experimental",
+  "private": true,
+  "type": "module",
+  "description": "Private Changesets metadata for the Rust crate; never an npm implementation",
+  "license": "Apache-2.0 OR MIT",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "changeset": "changeset",
+    "changeset:status": "changeset status",
+    "release:check": "node scripts/release.mjs check",
+    "version:prepare": "node scripts/release.mjs prepare",
+    "test:release": "node scripts/check-release.mjs"
+  },
+  "devDependencies": { "@changesets/cli": "3.0.3" }
+}

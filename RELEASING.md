@@ -2,6 +2,8 @@
 
 No registry package or GitHub release has been published yet. `publish = false` intentionally prevents accidental crates.io publication.
 
+Use [Changesets](.changeset/README.md) for new change records. `npm run version:prepare` is the reviewed preparation path: Changesets calculates an experimental version, then the bridge synchronizes only the crate/mirror/lock versions. `npm run release:check` rejects drift, enabled publishing, or stable-exit intent; `npm run test:release` rehearses this without modifying the checkout. Neither command publishes or tags. The current private npm manifest is release tooling only and must never be published.
+
 A source preview or package release needs:
 
 1. An exact specification commit, vector revision, and compatibility report; never infer compatibility from `0.1` alone.

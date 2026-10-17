@@ -11,3 +11,9 @@ Cargo package metadata was also inspected for all 65 resolved packages. Every pa
 The implementation reuses RustCrypto for ECDSA and the `sfv` parser for Structured Fields. Lockfile pins and reviewed action commit SHAs reduce unexpected changes but do not establish that dependencies are free of defects. Registry checksums do not authenticate every upstream maintainer or prevent a malicious future release.
 
 This automated advisory check and founding-author review are **not** an independent security audit. Repeat `cargo audit --json` against a current database before a release; an unavailable database must not be reported as a clean result.
+
+## Changesets release tooling
+
+The optional Node.js release project uses `@changesets/cli` 3.0.3 (MIT), pinned in `package-lock.json`, SHA-256 `a53acc2f35337bcc9e76b8e77ed17f3d753b647f4de7bb59e9fdc00f9b735871`. Its 40 dependency records declare 37 MIT and three ISC licenses, with none missing license metadata. `npm audit --audit-level=high` on 2026-10-17 reported zero known registry advisories. The dependency count excludes the private root project.
+
+This is development/release tooling, not a Cargo dependency or npm-distributed implementation. It is excluded from the crate archive. The npm registry check is not RustSec coverage, an independent audit, or a legal certification. Repeat it against the reviewed release lockfile and retain applicable notices.
