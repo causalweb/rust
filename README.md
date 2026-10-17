@@ -2,7 +2,7 @@
 
 Experimental protocol implementation components for [Causal Web](https://github.com/causalweb/spec): signed evidence, dependency evaluation, and HTTP constrained-observation helpers. Rust is an implementation language, not the definition of the protocol.
 
-This repository is not a backend framework, database, or production-ready service. There is no crates.io release yet. The exact specification source is pinned in [SPEC_REVISION](https://github.com/causalweb/rust/blob/main/SPEC_REVISION); fixtures use revision `0.1.3`. The protocol remains `0.1.1-experimental`.
+This repository is not a backend framework, database, or production-ready service. There is no crates.io release yet. The exact specification source is pinned in [SPEC_REVISION](https://github.com/causalweb/rust/blob/main/SPEC_REVISION); fixtures use revision `0.1.4`. The protocol remains `0.1.1-experimental`.
 
 ## Run the checks
 
