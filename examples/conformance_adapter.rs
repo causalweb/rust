@@ -325,10 +325,10 @@ fn http_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
         .ok_or("HTTP response lacks status")?;
     let status = u16::try_from(status)?;
     if let Some(request) = case.get("request").and_then(Value::as_object) {
-        if let Some(requirement) = request.get("causal_require").and_then(Value::as_str) {
-            if parse_context(&[requirement], Limits::default()).is_ok() {
-                return Err("malformed requirement unexpectedly parsed".into());
-            }
+        if let Some(requirement) = request.get("causal_require").and_then(Value::as_str)
+            && parse_context(&[requirement], Limits::default()).is_ok()
+        {
+            return Err("malformed requirement unexpectedly parsed".into());
         }
         if let Some(count) = request.get("evidence_count").and_then(Value::as_u64) {
             let values = std::iter::repeat_n("\"x\"", usize::try_from(count)?).collect::<Vec<_>>();
