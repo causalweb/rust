@@ -2,6 +2,8 @@
 
 This implementation is experimental and has not received an independent security audit. Do not use it to promise production consistency or access-control freshness without reviewing the storage and transport obligations in [CONFORMANCE.md](CONFORMANCE.md).
 
+The [dependency review snapshot](security/DEPENDENCIES.md) records advisory database/version, lockfile hash, and limitations. It is not external security review.
+
 Report exploitable vulnerabilities privately at [GitHub Security Advisories](https://github.com/causalweb/rust/security/advisories/new). Do not put credentials, evidence from real tenants, private topology, or exploit details for active deployments in public issues. Maintainers coordinate remediation and disclosure with the reporter; no response SLA is promised.
 
 ## Trust boundaries
