@@ -56,6 +56,8 @@ The library does not fetch keys, follow redirects, perform network I/O, or wait 
 
 Enable the optional `axum-0_8` feature when an Axum route owns an asynchronous authorization check and immutable snapshot read. The adapter is deliberately route-scoped: it does not use global middleware, because the route must bind lineage to the exact response state.
 
+The feature's integration test proves that an ordinary request invokes neither callback and remains route-owned, while a constrained request awaits both authorization checkpoints and one fixed-cut read before converting the confirmed core response. It is not a generic Axum middleware or deployment test.
+
 ```rust,ignore
 use causalweb::axum::{self as causal_axum, ObservationOptions};
 
