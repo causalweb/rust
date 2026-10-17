@@ -27,6 +27,8 @@ cargo run --locked --example wire_fixture
 
 It generates a fresh test key, signs synthetic evidence, rejects a stale state with 412, and confirms a covered state with 200. It prints public test evidence, not the private key. This is an in-process protocol test, **not** a durable source or a real multi-service demonstration. Never configure a deployment to trust these test identities.
 
+The `persistent_source` example is a narrower, POSIX-only development fixture for the TypeScript peer check. It persists a fixed-identity source fact/outbox document before issuing a token, can intentionally stop at that boundary, and can later recover blank outbox entries. Its private scalar comes from a test-harness environment variable and is never stored in that document. It has no `fsync`, durable key store, transaction manager, HTTP server, concurrency control, or Windows storage implementation. It is evidence for one Linux test path, not a reusable source adapter or a production durability claim.
+
 To verify fixture provenance and Rust signatures with Node.js, check out the `spec` commit named in `SPEC_REVISION`, then run:
 
 ```sh
