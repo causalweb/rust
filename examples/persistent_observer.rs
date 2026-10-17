@@ -163,7 +163,13 @@ fn valid_order(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn deliver(path: &Path, verifier: &Verifier, event: Event, now: u64) -> Result<(), Box<dyn Error>> {
+fn deliver(
+    path: &Path,
+    verifier: &Verifier,
+    event: Event,
+    now: u64,
+    crash_after_apply: bool,
+) -> Result<(), Box<dyn Error>> {
     if !valid_order(&event.order) || event.id.is_empty() || event.evidence.is_empty() {
         return Err("invalid delivery event".into());
     }
@@ -214,6 +220,9 @@ fn deliver(path: &Path, verifier: &Verifier, event: Event, now: u64) -> Result<(
         current = state.pending.remove(index);
     }
     replace(path, &state)?;
+    if crash_after_apply {
+        std::process::exit(86);
+    }
     Ok(())
 }
 
@@ -362,9 +371,20 @@ fn serve_one(
         write_response(stream, plain(StatusCode::NO_CONTENT))?;
         return Ok(false);
     }
-    if incoming.method == "POST" && incoming.path == "/deliver" {
+    if incoming.method == "POST"
+        && matches!(
+            incoming.path.as_str(),
+            "/deliver" | "/deliver?crash-after-apply"
+        )
+    {
         let event = serde_json::from_slice(&incoming.body)?;
-        return match deliver(path, verifier, event, now) {
+        return match deliver(
+            path,
+            verifier,
+            event,
+            now,
+            incoming.path == "/deliver?crash-after-apply",
+        ) {
             Ok(()) => {
                 write_response(stream, plain(StatusCode::NO_CONTENT))?;
                 Ok(true)
