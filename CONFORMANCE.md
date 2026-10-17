@@ -2,7 +2,9 @@
 
 Status: Experimental, source preview; no complete deployment conformance claim
 
-Specification: `0.1.1-experimental`, exact commit in [SPEC_REVISION](SPEC_REVISION). Vector revision: `0.1.2`. A passing fixture is evidence for that scenario, not certification of an entire class.
+Specification: `0.1.1-experimental`, exact commit in [SPEC_REVISION](SPEC_REVISION). Vector revision: `0.1.2`. The independent runner revision is pinned in [CONFORMANCE_REVISION](CONFORMANCE_REVISION). A passing fixture is evidence for that scenario, not certification of an entire class.
+
+The `conformance_adapter` example implements the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner's experimental evidence-verification JSON Lines profile. It maps its intentionally coarse public outcomes (`accept`, `expired`, `reject-request`, and `unsupported`) through this library's verifier. It does not expose local validation diagnostics, receive network trust, or establish full protocol conformance.
 
 ## Implemented and tested
 

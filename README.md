@@ -37,6 +37,8 @@ node scripts/check-wire.mjs ../spec
 
 The command reads the exact pinned Git commit, even if that checkout's branch has advanced, and rejects modified vendored fixtures. It checks cryptographic compatibility, not a second complete implementation.
 
+The development-only `conformance_adapter` example accepts one JSON Lines request from the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner and returns its coarse evidence-verification outcome. It is invoked by that runner in CI against the exact profile/vector pins. It is neither a network service nor a complete conformance claim.
+
 ## Components
 
 | Module | Behavior | Integration responsibility |
