@@ -97,6 +97,79 @@ impl VerifiedEvidence {
     }
 }
 
+/// Returns the ordered indices of verified evidence a carrier must retain.
+///
+/// Callers verify every item under the current intended policy first, then use the indices to
+/// retain their original compact evidence strings unchanged. `required_usable_until` is an
+/// absolute UTC second through which a retained dominant item must remain usable. This function
+/// does not issue, rewrite, or validate raw evidence and preserves every item it cannot safely
+/// omit. The requested horizon cannot precede `now`.
+pub fn retained_context_indices(
+    evidence: &[VerifiedEvidence],
+    now: u64,
+    required_usable_until: u64,
+) -> Result<Vec<usize>, Error> {
+    if required_usable_until < now {
+        return Err(Error::InvalidConfiguration);
+    }
+    Ok(evidence
+        .iter()
+        .enumerate()
+        .filter_map(|(dominated_index, dominated)| {
+            let omitted = evidence
+                .iter()
+                .enumerate()
+                .any(|(candidate_index, candidate)| {
+                    candidate_index != dominated_index
+                        && dominates(candidate, dominated, now, required_usable_until)
+                        && (position(candidate.position()).expect("validated position")
+                            > position(dominated.position()).expect("validated position")
+                            || candidate_index < dominated_index)
+                });
+            (!omitted).then_some(dominated_index)
+        })
+        .collect())
+}
+
+fn dominates(
+    candidate: &VerifiedEvidence,
+    dominated: &VerifiedEvidence,
+    now: u64,
+    required_usable_until: u64,
+) -> bool {
+    if candidate.expired(now) || dominated.expired(now) {
+        return false;
+    }
+    let candidate_causal = &candidate.claims[CLAIM];
+    let dominated_causal = &dominated.claims[CLAIM];
+    let candidate_audiences = audience_values(&candidate.claims);
+    let dominated_audiences = audience_values(&dominated.claims);
+    candidate.claims["iss"] == dominated.claims["iss"]
+        && candidate.claims["sub"] == dominated.claims["sub"]
+        && strict_json::integer(&candidate_causal["v"], 1).expect("validated version")
+            == strict_json::integer(&dominated_causal["v"], 1).expect("validated version")
+        && candidate.profile() == PROFILE
+        && candidate.profile() == dominated.profile()
+        && candidate.domain() == dominated.domain()
+        && candidate_causal["commit"] == dominated_causal["commit"]
+        && candidate_audiences == dominated_audiences
+        && position(candidate.position()).expect("validated position")
+            >= position(dominated.position()).expect("validated position")
+        && u128::from(candidate.expires_at()) + u128::from(candidate.skew)
+            > u128::from(required_usable_until)
+}
+
+fn audience_values(claims: &Value) -> BTreeSet<&str> {
+    match &claims["aud"] {
+        Value::String(value) => BTreeSet::from([value.as_str()]),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| value.as_str().expect("validated audience"))
+            .collect(),
+        _ => unreachable!("validated audience"),
+    }
+}
+
 fn absolute_uri(value: &str) -> bool {
     URI::try_from(value).is_ok()
 }

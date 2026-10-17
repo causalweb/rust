@@ -37,7 +37,7 @@ node scripts/check-wire.mjs ../spec
 
 The command reads the exact pinned Git commit, even if that checkout's branch has advanced, and rejects modified vendored fixtures. It checks cryptographic compatibility, not a second complete implementation.
 
-The development-only `conformance_adapter` example accepts one JSON Lines request from the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner and returns its coarse evidence-verification outcome. It is invoked by that runner in CI against the exact profile/vector pins. It is neither a network service nor a complete conformance claim.
+The development-only `conformance_adapter` example accepts one JSON Lines request from the separate [`causalweb/conformance`](https://github.com/causalweb/conformance) runner and returns the profile-specific result. It is wired for evidence verification, prefix evaluation, safe carrier reduction, HTTP confirmation, and fixed-cut observation profiles. It is neither a network service nor a complete conformance claim.
 
 ## Components
 
@@ -45,10 +45,11 @@ The development-only `conformance_adapter` example accepts one JSON Lines reques
 | --- | --- | --- |
 | `evidence::Issuer` | Emits ES256 JWS with validated common claims and prefix positions | Commit a stable fact and its propagation recovery information first; allocate stable positions and globally unique evidence IDs. |
 | `evidence::Verifier` | Enforces canonical encoding, unique JSON names at every depth, ES256, exact issuer/domain authority, audience, subject, version, and time policy | Supply trusted keys, domains, current authenticated subject, clock, lifetime, skew, and finite limits. |
+| `evidence::retained_context_indices` | Optionally returns original ordered evidence indices that a carrier must keep after safe Prefix Profile reduction | Verify every item under the current intended policy, retain the corresponding original compact strings without rewriting them, and report an invalid usable horizon. |
 | `prefix` | Distinguishes six outcomes against every relevant component of a selected state | Construct `Snapshot` from the exact representation and crash-safe lineage; authorize contract/schema-specific exclusions. |
 | `http` | Parses RFC 9651 fields, checks requirements before reading, rechecks authorization/expiry, emits fail-closed responses and capabilities | Supply a designated finite observation, authenticated transport, current access checks, and a state reader. |
 
-The library does not fetch keys, follow redirects, perform network I/O, or wait for progress. It advertises `max_wait_seconds: 0`; `Prefer: wait` is ignored. A client can retry a 412 under its own bounded policy. No dependency is silently discarded, compacted across domains, or rewritten.
+The library does not fetch keys, follow redirects, perform network I/O, or wait for progress. It advertises `max_wait_seconds: 0`; `Prefer: wait` is ignored. A client can retry a 412 under its own bounded policy. No dependency is silently discarded or rewritten. A carrier may compact only with `retained_context_indices`, which preserves all evidence it cannot prove safe to omit and never crosses domains.
 
 ## Safe integration sequence
 

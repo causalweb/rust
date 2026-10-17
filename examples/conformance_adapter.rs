@@ -13,7 +13,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::{
     CLAIM, PROFILE,
-    evidence::{IssuerTrust, Limits, Verifier, VerifyingKey},
+    evidence::{IssuerTrust, Limits, Verifier, VerifyingKey, retained_context_indices},
     http::{
         CONTEXT, ObservationOptions, REQUIRE, RESULT, accept_confirmation, observe, parse_context,
     },
@@ -307,6 +307,103 @@ fn prefix_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
         .iter()
         .all(|outcome| outcome.get("outcome") == Some(&Value::String("satisfied".into())));
     Ok(json!({"id":id,"outcomes":outcomes,"aggregate_success":aggregate_success}))
+}
+
+fn context_reduction_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
+    if input.version != 1 || input.profile != "context-reduction-v1" {
+        return Err("unsupported conformance profile".into());
+    }
+    let vector = input
+        .vector
+        .as_object()
+        .ok_or("context-reduction vector must be an object")?;
+    let case = input
+        .case
+        .as_object()
+        .ok_or("context-reduction case must be an object")?;
+    let id = value_string(
+        case.get("id").ok_or("context-reduction case lacks id")?,
+        "context-reduction case id",
+    )?;
+    let evidence = case
+        .get("evidence")
+        .and_then(Value::as_array)
+        .ok_or("context-reduction case lacks evidence")?;
+    let horizon = case
+        .get("required_usable_until")
+        .and_then(Value::as_u64)
+        .ok_or("context-reduction case lacks required usable horizon")?;
+    let now = vector
+        .get("assumptions")
+        .and_then(Value::as_object)
+        .and_then(|assumptions| assumptions.get("validation_time"))
+        .and_then(Value::as_u64)
+        .ok_or("context-reduction vector lacks validation time")?;
+    let issuer = "https://issuer.example";
+    let audience = "https://verifier.example/causal";
+    let subject = "opaque-tenant";
+    let domain_a = value_string(
+        vector.get("domain_a").ok_or("vector lacks domain_a")?,
+        "domain_a",
+    )?;
+    let domain_b = value_string(
+        vector.get("domain_b").ok_or("vector lacks domain_b")?,
+        "domain_b",
+    )?;
+    let signing_key = causalweb::evidence::SigningKey::generate();
+    let verifier = Verifier::new(
+        audience.into(),
+        vec![IssuerTrust {
+            issuer: issuer.into(),
+            keys: BTreeMap::from([("prefix-conformance".into(), *signing_key.verifying_key())]),
+            domains: [domain_a.into(), domain_b.into()].into_iter().collect(),
+            max_lifetime_seconds: 86_400,
+            clock_skew_seconds: 0,
+        }],
+        Limits::default(),
+    )?;
+    let verified = evidence
+        .iter()
+        .enumerate()
+        .map(|(index, item)| -> Result<_, Box<dyn Error>> {
+            let item = item
+                .as_object()
+                .ok_or("context-reduction evidence must be an object")?;
+            let alias = value_string(
+                item.get("domain")
+                    .ok_or("context-reduction evidence lacks domain")?,
+                "context-reduction domain",
+            )?;
+            let domain = value_string(vector.get(alias).ok_or("unknown domain alias")?, "domain")?;
+            let position = value_string(
+                item.get("position")
+                    .ok_or("context-reduction evidence lacks position")?,
+                "context-reduction position",
+            )?;
+            let expires_at = item
+                .get("exp")
+                .and_then(Value::as_u64)
+                .ok_or("context-reduction evidence lacks expiration")?;
+            let claims = json!({
+                "iss": issuer,
+                "sub": subject,
+                "aud": audience,
+                "iat": 1,
+                "exp": expires_at,
+                "jti": format!("urn:context-reduction:{id}:{index}"),
+                CLAIM: {
+                    "v": 1,
+                    "profile": PROFILE,
+                    "domain": domain,
+                    "position": position,
+                    "commit": "stable"
+                }
+            });
+            Ok(verifier.verify(&signed_evidence(&signing_key, &claims), subject, now)?)
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    let retained_indices = retained_context_indices(&verified, now, horizon)?;
+    Ok(json!({"id":id,"retained_indices":retained_indices}))
 }
 
 fn http_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
@@ -683,6 +780,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let profile = value_string(raw.get("profile").ok_or("input lacks profile")?, "profile")?;
     if profile == "prefix-evaluation-v1" {
         println!("{}", prefix_result(serde_json::from_value(raw)?)?);
+        return Ok(());
+    }
+    if profile == "context-reduction-v1" {
+        println!(
+            "{}",
+            context_reduction_result(serde_json::from_value(raw)?)?
+        );
         return Ok(());
     }
     if profile == "http-client-confirmation-v1" {

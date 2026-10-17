@@ -2,7 +2,7 @@ mod common;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::{
     CLAIM,
-    evidence::{IssuerTrust, SigningKey, Verifier, VerifyingKey},
+    evidence::{IssuerTrust, SigningKey, Verifier, VerifyingKey, retained_context_indices},
     http as cw_http,
     prefix::{self, Frontier, Mapping, Snapshot},
 };
@@ -136,13 +136,29 @@ fn all_pinned_prefix_vectors() {
             continue;
         }
         if kind == "context-reduction" {
-            // Reduction is optional. This carrier preserves the complete, ordered context.
-            let retained: Vec<_> = case["evidence"]
+            let evidence: Vec<_> = case["evidence"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|v| v["position"].clone())
+                .enumerate()
+                .map(|(index, item)| {
+                    let alias = item["domain"].as_str().unwrap();
+                    let mut fact = claims(item["position"].as_str().unwrap());
+                    fact[CLAIM]["domain"] = vectors[alias].clone();
+                    fact["exp"] = item["exp"].clone();
+                    fact["jti"] = json!(format!("urn:test:context:{}:{index}", case["id"]));
+                    verifier.verify(&sign(&key, &fact), SUBJECT, 100).unwrap()
+                })
                 .collect();
+            let retained: Vec<_> = retained_context_indices(
+                &evidence,
+                100,
+                case["required_usable_until"].as_u64().unwrap(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|index| json!(evidence[index].position()))
+            .collect();
             assert!(
                 case["allowed_retained_positions"]
                     .as_array()
@@ -230,6 +246,36 @@ fn all_pinned_prefix_vectors() {
             case["id"]
         );
     }
+}
+
+#[test]
+fn carrier_reduction_preserves_non_dominant_evidence() {
+    let key = SigningKey::generate();
+    let verifier = verifier(*key.verifying_key());
+    let evidence = |position: &str, expires_at: u64, domain: &str| {
+        let mut fact = claims(position);
+        fact["exp"] = json!(expires_at);
+        fact[CLAIM]["domain"] = json!(domain);
+        verifier.verify(&sign(&key, &fact), SUBJECT, 100).unwrap()
+    };
+    let lower = evidence("5", 300, DOMAIN);
+    let higher = evidence("8", 300, DOMAIN);
+    assert_eq!(
+        retained_context_indices(&[lower, higher], 100, 180),
+        Ok(vec![1])
+    );
+    let lower = evidence("5", 300, DOMAIN);
+    let short_lived_higher = evidence("8", 150, DOMAIN);
+    assert_eq!(
+        retained_context_indices(&[lower, short_lived_higher], 100, 180),
+        Ok(vec![0, 1])
+    );
+    let lower = evidence("5", 300, DOMAIN);
+    let other_domain = evidence("8", 300, OTHER_DOMAIN);
+    assert_eq!(
+        retained_context_indices(&[lower, other_domain], 100, 180),
+        Ok(vec![0, 1])
+    );
 }
 
 #[test]
