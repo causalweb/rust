@@ -5,6 +5,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
     error::Error,
     io::{self, Read},
 };
@@ -13,10 +14,12 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use causalweb::{
     CLAIM, PROFILE,
     evidence::{IssuerTrust, Limits, Verifier, VerifyingKey},
-    http::{RESULT, accept_confirmation, parse_context},
+    http::{
+        CONTEXT, ObservationOptions, REQUIRE, RESULT, accept_confirmation, observe, parse_context,
+    },
     prefix::{Frontier, Mapping, Snapshot, evaluate, position},
 };
-use http::{HeaderValue, Response, StatusCode};
+use http::{HeaderValue, Method, Request, Response, StatusCode, header};
 use p256::ecdsa::{Signature, signature::Signer};
 use p256::elliptic_curve::Generate;
 use serde::Deserialize;
@@ -358,6 +361,318 @@ fn http_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
     Ok(json!({"id":id,"result":result}))
 }
 
+fn observer_evidence(
+    signing_key: &causalweb::evidence::SigningKey,
+    assumptions: &serde_json::Map<String, Value>,
+    id: &str,
+    requirement: &serde_json::Map<String, Value>,
+    index: usize,
+) -> Result<String, Box<dyn Error>> {
+    let issuer = value_string(
+        assumptions.get("issuer").ok_or("observer lacks issuer")?,
+        "issuer",
+    )?;
+    let subject = value_string(
+        assumptions.get("subject").ok_or("observer lacks subject")?,
+        "subject",
+    )?;
+    let audience = value_string(
+        assumptions
+            .get("audience")
+            .ok_or("observer lacks audience")?,
+        "audience",
+    )?;
+    let domain = value_string(
+        assumptions.get("domain").ok_or("observer lacks domain")?,
+        "domain",
+    )?;
+    let position = value_string(
+        requirement
+            .get("position")
+            .ok_or("observer requirement lacks position")?,
+        "position",
+    )?;
+    let expires_at = requirement
+        .get("expires_at")
+        .and_then(Value::as_u64)
+        .unwrap_or(1000);
+    let profile = requirement
+        .get("profile")
+        .and_then(Value::as_str)
+        .unwrap_or(PROFILE);
+    Ok(signed_evidence(
+        signing_key,
+        &json!({
+            "iss": issuer,
+            "sub": subject,
+            "aud": audience,
+            "iat": 1,
+            "exp": expires_at,
+            "jti": format!("urn:observer-conformance:{id}:{index}"),
+            CLAIM: {
+                "v": 1,
+                "profile": profile,
+                "domain": domain,
+                "position": position,
+                "commit": "stable"
+            }
+        }),
+    ))
+}
+
+fn observer_frontier(value: &Value) -> Result<Frontier, Box<dyn Error>> {
+    if value.as_str() == Some("unknown") {
+        Ok(Frontier::Unknown)
+    } else {
+        frontier(value)
+    }
+}
+
+fn observer_result(input: PrefixInput) -> Result<Value, Box<dyn Error>> {
+    if input.version != 1 || input.profile != "http-observer-v1" {
+        return Err("unsupported conformance profile".into());
+    }
+    let vector = input
+        .vector
+        .as_object()
+        .ok_or("observer vector must be an object")?;
+    let assumptions = vector
+        .get("assumptions")
+        .and_then(Value::as_object)
+        .ok_or("observer vector lacks assumptions")?;
+    let case = input
+        .case
+        .as_object()
+        .ok_or("observer case must be an object")?;
+    let id = value_string(
+        case.get("id").ok_or("observer case lacks id")?,
+        "observer case id",
+    )?
+    .to_owned();
+    let request_input = case
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or("observer case lacks request")?;
+    let expected = case
+        .get("expected")
+        .and_then(Value::as_object)
+        .ok_or("observer case lacks expected result")?;
+    let issuer = value_string(
+        assumptions.get("issuer").ok_or("observer lacks issuer")?,
+        "issuer",
+    )?;
+    let audience = value_string(
+        assumptions
+            .get("audience")
+            .ok_or("observer lacks audience")?,
+        "audience",
+    )?;
+    let subject = value_string(
+        assumptions.get("subject").ok_or("observer lacks subject")?,
+        "subject",
+    )?;
+    let domain = value_string(
+        assumptions.get("domain").ok_or("observer lacks domain")?,
+        "domain",
+    )?;
+    let target = value_string(
+        assumptions.get("target").ok_or("observer lacks target")?,
+        "target",
+    )?;
+    let validation_time = assumptions
+        .get("validation_time")
+        .and_then(Value::as_u64)
+        .ok_or("observer lacks validation time")?;
+    let signing_key = causalweb::evidence::SigningKey::generate();
+    let verifier = Verifier::new(
+        audience.into(),
+        vec![IssuerTrust {
+            issuer: issuer.into(),
+            keys: BTreeMap::from([("prefix-conformance".into(), *signing_key.verifying_key())]),
+            domains: [domain.into()].into_iter().collect(),
+            max_lifetime_seconds: 86_400,
+            clock_skew_seconds: 0,
+        }],
+        Limits::default(),
+    )?;
+    let method = value_string(
+        request_input
+            .get("method")
+            .ok_or("observer request lacks method")?,
+        "method",
+    )?
+    .parse::<Method>()?;
+    let mut request = Request::builder().method(method);
+    if request_input.get("connection_nominates_causal") == Some(&Value::Bool(true)) {
+        request = request.header(header::CONNECTION, "causal-require");
+    }
+    if let Some(raw) = request_input
+        .get("raw_causal_require")
+        .and_then(Value::as_str)
+    {
+        request = request.header(REQUIRE, raw);
+    } else if let Some(count) = request_input
+        .get("requirement_count")
+        .and_then(Value::as_u64)
+    {
+        let values = std::iter::repeat_n("\"x\"", usize::try_from(count)?).collect::<Vec<_>>();
+        request = request.header(REQUIRE, values.join(", "));
+    } else {
+        for (index, requirement) in request_input
+            .get("requirements")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let requirement = requirement
+                .as_object()
+                .ok_or("observer requirement must be an object")?;
+            let token = observer_evidence(&signing_key, assumptions, &id, requirement, index)?;
+            request = request.header(REQUIRE, format!("\"{token}\""));
+        }
+    }
+    let request = request.body(())?;
+    let state = case.get("state").and_then(Value::as_object);
+    let frontiers = state
+        .and_then(|state| state.get("frontiers"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(observer_frontier)
+        .collect::<Result<Vec<_>, _>>()?;
+    let first_terminal_failure = match state.and_then(|state| state.get("first_terminal_failure")) {
+        Some(value) => Some(position(value_string(value, "observer terminal failure")?)?),
+        None => None,
+    };
+    let progress_possible = state
+        .and_then(|state| state.get("progress_possible"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let lineage = BTreeMap::from([(
+        (issuer.into(), domain.into()),
+        Mapping::Relevant {
+            component_frontiers: frontiers,
+            first_terminal_failure,
+            progress_possible,
+        },
+    )]);
+    let representation = case.get("representation").and_then(Value::as_object);
+    let status = representation
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_u64)
+        .unwrap_or(200);
+    let body = representation
+        .and_then(|value| value.get("body"))
+        .and_then(Value::as_str)
+        .unwrap_or("unused")
+        .as_bytes()
+        .to_vec();
+    let mut response_headers = http::HeaderMap::new();
+    if representation.and_then(|value| value.get("causal_context")) == Some(&Value::Bool(true)) {
+        response_headers.insert(CONTEXT, HeaderValue::from_static("not-evidence"));
+    }
+    let mut representation_response = Response::builder()
+        .status(StatusCode::from_u16(u16::try_from(status)?)?)
+        .body(body)?;
+    *representation_response.headers_mut() = response_headers;
+    let snapshot = Snapshot::new(
+        target.into(),
+        representation_response,
+        "contract/v1".into(),
+        "schema/v1".into(),
+        lineage,
+    )?;
+    let mut authorization_calls = 0usize;
+    let mut clock_calls = 0usize;
+    let mut read_calls = 0usize;
+    let authorization = case.get("authorization").and_then(Value::as_str);
+    let clock_after_read = case
+        .get("clock_after_read")
+        .and_then(Value::as_u64)
+        .unwrap_or(validation_time);
+    let response = observe(
+        ObservationOptions {
+            request: &request,
+            target,
+            designated_observation: case.get("designated_observation") != Some(&Value::Bool(false)),
+            verifier: &verifier,
+            authenticated_subject: subject,
+        },
+        || {
+            authorization_calls += 1;
+            Ok::<bool, Infallible>(
+                authorization != Some("deny-before-read")
+                    && !(authorization == Some("deny-before-response") && authorization_calls > 1),
+            )
+        },
+        || {
+            clock_calls += 1;
+            if clock_calls == 1 {
+                validation_time
+            } else {
+                clock_after_read
+            }
+        },
+        || {
+            read_calls += 1;
+            Ok::<_, Infallible>(snapshot)
+        },
+    )
+    .unwrap_or_else(|error| error.into_response());
+    let body = std::str::from_utf8(response.body())?.to_owned();
+    let mut result = serde_json::Map::from_iter([
+        ("status".into(), json!(response.status().as_u16())),
+        (
+            "causal_result".into(),
+            response
+                .headers()
+                .get(RESULT)
+                .and_then(|value| value.to_str().ok())
+                .map_or(Value::Null, |value| json!(value)),
+        ),
+        (
+            "cache_control".into(),
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok())
+                .map_or(Value::Null, |value| json!(value)),
+        ),
+        ("read_calls".into(), json!(read_calls)),
+    ]);
+    if expected.contains_key("vary_contains_causal_require") {
+        let contains = response
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .any(|value| {
+                value.to_str().is_ok_and(|value| {
+                    value
+                        .split(',')
+                        .any(|value| value.trim().eq_ignore_ascii_case("causal-require"))
+                })
+            });
+        result.insert("vary_contains_causal_require".into(), json!(contains));
+    }
+    if expected.contains_key("context_removed") {
+        result.insert(
+            "context_removed".into(),
+            json!(!response.headers().contains_key(CONTEXT)),
+        );
+    }
+    if expected.contains_key("body") {
+        result.insert("body".into(), json!(body));
+    }
+    if expected.contains_key("outcomes") {
+        result.insert(
+            "outcomes".into(),
+            serde_json::from_str::<Value>(&body)?["outcomes"].clone(),
+        );
+    }
+    Ok(json!({"id":id,"result":result}))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut bytes = Vec::new();
     io::stdin().take(1_048_577).read_to_end(&mut bytes)?;
@@ -372,6 +687,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if profile == "http-client-confirmation-v1" {
         println!("{}", http_result(serde_json::from_value(raw)?)?);
+        return Ok(());
+    }
+    if profile == "http-observer-v1" {
+        println!("{}", observer_result(serde_json::from_value(raw)?)?);
         return Ok(());
     }
     let input: Input = serde_json::from_value(raw)?;
