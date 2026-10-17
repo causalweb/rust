@@ -2,7 +2,7 @@
 
 Experimental protocol implementation components for [Causal Web](https://github.com/causalweb/spec): signed evidence, dependency evaluation, and HTTP constrained-observation helpers. Rust is an implementation language, not the definition of the protocol.
 
-This repository is not a backend framework, database, or production-ready service. There is no crates.io release yet. The exact specification source is pinned in [SPEC_REVISION](SPEC_REVISION); fixtures use revision `0.1.2`. The protocol remains `0.1.1-experimental`.
+This repository is not a backend framework, database, or production-ready service. There is no crates.io release yet. The exact specification source is pinned in [SPEC_REVISION](https://github.com/causalweb/rust/blob/main/SPEC_REVISION); fixtures use revision `0.1.2`. The protocol remains `0.1.1-experimental`.
 
 ## Run the checks
 
@@ -17,7 +17,7 @@ cargo clippy --all-targets --locked -- -D warnings
 node scripts/check-package.mjs
 ```
 
-The last command requires a clean checkout. It builds and verifies the actual `.crate`, then compiles and runs a separate application against Cargo's extracted package, not this checkout's `src` directory. It uses the pinned dependency lockfile and cached dependencies in offline mode. The [consumer application](tests/consumer/src/main.rs) exercises typed issuance, stale rejection, confirmation, and access denial. It is synthetic and makes no durability claim.
+The last command requires a clean checkout. It builds and verifies the actual `.crate`, then compiles and runs a separate application against Cargo's extracted package, not this checkout's `src` directory. It uses the pinned dependency lockfile and cached dependencies in offline mode. The [consumer application](https://github.com/causalweb/rust/blob/main/tests/consumer/src/main.rs) exercises typed issuance, stale rejection, confirmation, and access denial. It is synthetic and makes no durability claim.
 
 Run a synthetic wire exchange:
 
@@ -82,10 +82,10 @@ Call this only after the storage adapter establishes commitment and recovery. `e
 
 `Limits::default()` supplies finite local limits: 16 requirements, 16,384 combined field bytes, 8,192 token bytes, 8,192 decoded bytes, and JSON depth 32. Lifetime, clock skew, trust, subject, and authorization remain explicit. Use `cargo doc --open --no-deps` for the API reference.
 
-Source API migration: `issue_committed` previously took `&serde_json::Value`. Replace it with `&CommittedEvidence`; do not supply `iss`, `alg`, `commit`, `profile`, or version markers. This is a breaking change to the unreleased source preview, not a new wire revision. See [CHANGELOG.md](CHANGELOG.md). No registry package has been released.
+Source API migration: `issue_committed` previously took `&serde_json::Value`. Replace it with `&CommittedEvidence`; do not supply `iss`, `alg`, `commit`, `profile`, or version markers. This is a breaking change to the unreleased source preview, not a new wire revision. See [CHANGELOG.md](https://github.com/causalweb/rust/blob/main/CHANGELOG.md). No registry package has been released.
 
 ## Status and participation
 
-See [CONFORMANCE.md](CONFORMANCE.md) for tested behavior and unclaimed classes, [SECURITY.md](SECURITY.md) for deployment risks and private reporting, and [RELEASING.md](RELEASING.md) for release gates. Design discussion belongs in [organization Discussions](https://github.com/orgs/causalweb/discussions); normative corrections belong in the [specification proposal process](https://github.com/causalweb/spec/tree/main/proposals).
+See [CONFORMANCE.md](https://github.com/causalweb/rust/blob/main/CONFORMANCE.md) for tested behavior and unclaimed classes, [SECURITY.md](https://github.com/causalweb/rust/blob/main/SECURITY.md) for deployment risks and private reporting, and [RELEASING.md](https://github.com/causalweb/rust/blob/main/RELEASING.md) for release gates. Design discussion belongs in [organization Discussions](https://github.com/orgs/causalweb/discussions); normative corrections belong in the [specification proposal process](https://github.com/causalweb/spec/tree/main/proposals).
 
-Code and tooling: `Apache-2.0 OR MIT`. Documentation: `CC-BY-4.0`. See [LICENSE.md](LICENSE.md).
+Code and tooling: `Apache-2.0 OR MIT`. Documentation: `CC-BY-4.0`. See [LICENSE.md](https://github.com/causalweb/rust/blob/main/LICENSE.md).
