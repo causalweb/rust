@@ -7,7 +7,7 @@ publish = false
 description = "Experimental Rust implementation of Causal Web evidence and constrained observations"
 repository = "https://github.com/causalweb/rust"
 license = "Apache-2.0 OR MIT"
-exclude = ["tests/consumer/", "node_modules/", "package.json", "package-lock.json", ".changeset/"]
+exclude = ["tests/consumer/", "node_modules/", "package.json", "package-lock.json", "biome.json", ".changeset/"]
 
 [dependencies]
 base64 = "0.22.1"

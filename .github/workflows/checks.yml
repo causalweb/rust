@@ -32,7 +32,10 @@ jobs:
       - run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - run: rustup override set 1.95.0
       - run: rustc --version
+      - run: npm ci --ignore-scripts
+      - run: npm run check
       - run: cargo fmt --check
+      - run: rustfmt --edition 2024 --check tests/consumer/src/main.rs
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: cargo doc --no-deps --locked
@@ -40,7 +43,6 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: node scripts/check-wire.mjs .spec
       - run: node scripts/check-package.mjs
-      - run: npm ci --ignore-scripts
       - run: npm run changeset:status
       - run: npm run release:check
       - if: github.event_name == 'pull_request'

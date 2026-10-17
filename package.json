@@ -5,13 +5,22 @@
   "type": "module",
   "description": "Private Changesets metadata for the Rust crate; never an npm implementation",
   "license": "Apache-2.0 OR MIT",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint --error-on-warnings .",
+    "check": "biome ci --error-on-warnings .",
     "changeset": "changeset",
     "changeset:status": "changeset status",
     "release:check": "node scripts/release.mjs check",
     "version:prepare": "node scripts/release.mjs prepare",
     "test:release": "node scripts/check-release.mjs"
   },
-  "devDependencies": { "@changesets/cli": "3.0.3" }
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@changesets/cli": "3.0.3"
+  }
 }
