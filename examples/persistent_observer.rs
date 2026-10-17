@@ -24,6 +24,7 @@ use causalweb::{
     http::{self as protocol_http, ObservationOptions},
     prefix::{Frontier, Mapping, Snapshot, position},
 };
+use p256::ecdsa::{Signature, signature::Verifier as SignatureVerifier};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -50,6 +51,13 @@ struct Event {
     issued_at: String,
     expires_at: String,
     evidence: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Delivery {
+    event: Event,
+    proof: String,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -173,6 +181,41 @@ fn authorized_delivery(incoming: &Incoming, credential: &str) -> bool {
         .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
         .map(|(_, value)| value);
     matches!((values.next(), values.next()), (Some(value), None) if value == &expected)
+}
+
+fn verify_delivery_proof(
+    key: &VerifyingKey,
+    event: &Event,
+    proof: &str,
+) -> Result<(), Box<dyn Error>> {
+    if proof.len() > 16_384 {
+        return Err("delivery proof exceeds test fixture limit".into());
+    }
+    let mut parts = proof.split('.');
+    let (Some(encoded_header), Some(encoded_payload), Some(encoded_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err("invalid delivery proof shape".into());
+    };
+    let header: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded_header)?)?;
+    if header.get("alg").and_then(serde_json::Value::as_str) != Some("ES256")
+        || header.get("kid").and_then(serde_json::Value::as_str) != Some(KID)
+        || header.get("typ").and_then(serde_json::Value::as_str)
+            != Some("causalweb-demo-delivery+jwt")
+    {
+        return Err("invalid delivery proof header".into());
+    }
+    let payload = URL_SAFE_NO_PAD.decode(encoded_payload)?;
+    if payload != serde_json::to_vec(event)? {
+        return Err("delivery proof does not bind event payload".into());
+    }
+    let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(encoded_signature)?)?;
+    key.verify(
+        format!("{encoded_header}.{encoded_payload}").as_bytes(),
+        &signature,
+    )?;
+    Ok(())
 }
 
 fn valid_order(value: &str) -> bool {
@@ -383,6 +426,7 @@ fn serve_one(
     stream: &mut TcpStream,
     path: &Path,
     verifier: &Verifier,
+    delivery_key: &VerifyingKey,
     delivery_credential: &str,
     now: u64,
 ) -> Result<bool, Box<dyn Error>> {
@@ -401,11 +445,16 @@ fn serve_one(
             write_response(stream, plain(StatusCode::UNAUTHORIZED))?;
             return Ok(true);
         }
-        let event = serde_json::from_slice(&incoming.body)?;
+        let delivery: Delivery = serde_json::from_slice(&incoming.body)?;
+        if let Err(error) = verify_delivery_proof(delivery_key, &delivery.event, &delivery.proof) {
+            eprintln!("persistent observer rejected delivery proof: {error}");
+            write_response(stream, plain(StatusCode::BAD_REQUEST))?;
+            return Ok(true);
+        }
         return match deliver(
             path,
             verifier,
-            event,
+            delivery.event,
             now,
             incoming.path == "/deliver?crash-after-apply",
         ) {
@@ -451,6 +500,7 @@ fn serve_one(
 fn main() -> Result<(), Box<dyn Error>> {
     let args = arguments()?;
     let verifier = verifier()?;
+    let delivery_key = verifying_key()?;
     let delivery_credential = delivery_credential()?;
     let listener = TcpListener::bind(&args.bind)?;
     println!("http://{}", listener.local_addr()?);
@@ -461,6 +511,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut stream,
             &args.state,
             &verifier,
+            &delivery_key,
             &delivery_credential,
             args.now,
         ) {
