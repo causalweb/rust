@@ -17,3 +17,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["raw_value", "arbitrary_precision"] }
 sfv = "0.16.0"
 uriparse = "0.6.4"
+
+[dev-dependencies]
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
