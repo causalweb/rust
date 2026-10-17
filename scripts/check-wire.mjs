@@ -8,7 +8,6 @@ const spec = process.argv[2];
 assert.ok(spec, "usage: node scripts/check-wire.mjs PATH_TO_SPEC_CHECKOUT");
 const revision = readFileSync("SPEC_REVISION", "utf8").trim();
 assert.match(revision, /^[0-9a-f]{40}$/);
-assert.equal(execFileSync("git", ["-C", spec, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), revision);
 for (const name of ["jws-evidence.json", "prefix-evaluation.json", "http-outcomes.json", "evidence-validation.json"]) {
   const pinned = execFileSync("git", ["-C", spec, "show", `${revision}:test-vectors/${name}`]);
   assert.deepEqual(readFileSync(resolve("tests/vectors", name)), pinned, `${name} differs from pinned specification`);

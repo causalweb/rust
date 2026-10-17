@@ -89,6 +89,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{}",
         json!({"synthetic_test_fixture":true,"compact":compact,"public_jwk":public_jwk,
+        "require_field":request.headers()[cw_http::REQUIRE].to_str()?,
+        "result_field":fresh.headers()[cw_http::RESULT].to_str()?,
         "stale_status":stale.status().as_u16(),"fresh_status":fresh.status().as_u16(),"confirmed":true})
     );
     Ok(())

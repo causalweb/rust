@@ -30,7 +30,7 @@ To verify fixture provenance and Rust signatures with Node.js, check out the `sp
 node scripts/check-wire.mjs ../spec
 ```
 
-The command rejects a mismatched specification checkout or modified vendored fixtures. It checks cryptographic compatibility, not a second complete implementation.
+The command reads the exact pinned Git commit, even if that checkout's branch has advanced, and rejects modified vendored fixtures. It checks cryptographic compatibility, not a second complete implementation.
 
 ## Components
 

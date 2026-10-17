@@ -22,6 +22,7 @@ struct Input {
     kid: String,
     public_jwk: Value,
     compact: String,
+    causal_require: Option<String>,
     now: u64,
     frontier: String,
 }
@@ -59,6 +60,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut request = Request::new(());
     *request.headers_mut() = cw_http::request_headers(&[input.compact], limits)?;
+    if let Some(field) = input.causal_require {
+        request
+            .headers_mut()
+            .insert(cw_http::REQUIRE, http::HeaderValue::from_str(&field)?);
+    }
     let frontier = causalweb::prefix::position(&input.frontier)?;
     let response = cw_http::observe(
         &request,
